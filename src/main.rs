@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
 
-let mut stdout = io::stdout();
+    let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     Terminal::new(backend).map_err(Into::into)
@@ -69,10 +69,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    // Quit
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
 
-                    // Tab to switch input (in Input tab) or tabs (other tabs)
                     KeyCode::Tab => {
                         if app.active_tab == ActiveTab::Input {
                             app.input_target = match app.input_target {
@@ -82,7 +80,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
                             };
                             app.current_input.clear();
                         } else {
-                            // Cycle tabs
                             app.active_tab = match app.active_tab {
                                 ActiveTab::Input => ActiveTab::Conversions,
                                 ActiveTab::Conversions => ActiveTab::Contrast,
@@ -90,43 +87,42 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
                                 ActiveTab::Preview => ActiveTab::Input,
                             };
                         }
-                    }
+                    },
 
-                    // Enter to submit input
                     KeyCode::Enter => {
                         if app.active_tab == ActiveTab::Input {
                             app.submit_input();
                         }
-                    }
+                    },
 
-                    // Char input
                     KeyCode::Char(c) => {
                         if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                             app.current_input.push(c);
                         }
-                    }
+                    },
 
-                    // Backspace
                     KeyCode::Backspace => {
                         if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                             app.current_input.pop();
                         }
-                    }
+                    },
 
-                    // Spears B to toggle bold
                     KeyCode::Char('b') | KeyCode::Char('B') => {
                         app.is_bold = !app.is_bold;
-                    }
-
-                    // Arrows to cycle size (in Preview or Contrast)
-                    KeyCode::Up => if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx > 0 {
-                        app.font_size_idx -= 1;
-                    },
-                    KeyCode::Down => if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx < app::FONT_SIZES.len() - 1 {
-                        app.font_size_idx += 1;
                     },
 
-                    // Number keys for tab selection
+                    KeyCode::Up => {
+                        if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx > 0 {
+                            app.font_size_idx -= 1;
+                        }
+                    },
+
+                    KeyCode::Down => {
+                        if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx < app::FONT_SIZES.len() - 1 {
+                            app.font_size_idx += 1;
+                        }
+                    },
+
                     KeyCode::Char('1') => app.active_tab = ActiveTab::Input,
                     KeyCode::Char('2') => app.active_tab = ActiveTab::Conversions,
                     KeyCode::Char('3') => app.active_tab = ActiveTab::Contrast,
@@ -143,91 +139,3 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
     }
 }
 
-                    // Enter to submit input
-                    KeyCode::Enter => {
-                        app.submit_input();
-                    }
-
-                    // Char input for current field
-                    KeyCode::Char(c) => {
-                        if app.input_target != InputTarget::None {
-                            app.current_input.push(c);
-                        }
-                    }
-
-                    //green Backspace to delete char
-                    KeyCode::Backspace => {
-                        if app.input_target != InputTarget::None {
-                            app.current_input.pop();
-                        }
-                    }
-
-                    // B to toggle bold
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
-                        app.is_bold = !app.is_bold;
-                    }
-
-                    // Arrows to cycle font size
-                    KeyCode::Up => {
-                        if app.font_size_idx > 0 {
-                            app.font_size_idx -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        if app.font_size_idx < app::FONT_SIZES.len() - 1 {
-                            app.font_size_idx += 1;
-                        }
-                    }
-
-                    _ => {}
-                }
-            }
-        }
-
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
-        }
-    }
-}
-
-// Sets up the terminal in raw mode with alternate screen
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    Terminal::new(backend).map_err(Into::into)
-}
-
-// Restores the terminal to normal mode
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
-}
-
-// Main event loop: Renders UI and handles 'q' to quit
-fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    let tick_rate = Duration::from_millis(250);
-    let mut last_tick = Instant::now();
-
-    loop {
-        terminal.draw(ui::render)?;
-
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or(Duration::ZERO);
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if let KeyCode::Char('q') = key.code {
-                    return Ok(());
-                }
-            }
-        }
-
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
-        }
-    }
-}
