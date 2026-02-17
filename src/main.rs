@@ -57,7 +57,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-// Main event loop with key handling
+// Main event loop with key handling (add tab switching)
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
@@ -70,18 +70,78 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     // Quit
-                    KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::NONE) => return Ok(()),
-                    KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
 
-                    // Tab to switch input target and clear current input
+                    // Tab to switch input (in Input tab) or tabs (other tabs)
                     KeyCode::Tab => {
-                        app.input_target = match app.input_target {
-                            InputTarget::Foreground => InputTarget::Background,
-                            InputTarget::Background => InputTarget::Foreground,
-                            InputTarget::None => InputTarget::Foreground,
-                        };
-                        app.current_input.clear();
+                        if app.active_tab == ActiveTab::Input {
+                            app.input_target = match app.input_target {
+                                InputTarget::Foreground => InputTarget::Background,
+                                InputTarget::Background => InputTarget::Foreground,
+                                InputTarget::None => InputTarget::Foreground,
+                            };
+                            app.current_input.clear();
+                        } else {
+                            // Cycle tabs
+                            app.active_tab = match app.active_tab {
+                                ActiveTab::Input => ActiveTab::Conversions,
+                                ActiveTab::Conversions => ActiveTab::Contrast,
+                                ActiveTab::Contrast => ActiveTab::Preview,
+                                ActiveTab::Preview => ActiveTab::Input,
+                            };
+                        }
                     }
+
+                    // Enter to submit input
+                    KeyCode::Enter => {
+                        if app.active_tab == ActiveTab::Input {
+                            app.submit_input();
+                        }
+                    }
+
+                    // Char input
+                    KeyCode::Char(c) => {
+                        if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+                            app.current_input.push(c);
+                        }
+                    }
+
+                    // Backspace
+                    KeyCode::Backspace => {
+                        if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+                            app.current_input.pop();
+                        }
+                    }
+
+                    // Spears B to toggle bold
+                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                        app.is_bold = !app.is_bold;
+                    }
+
+                    // Arrows to cycle size (in Preview or Contrast)
+                    KeyCode::Up => if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx > 0 {
+                        app.font_size_idx -= 1;
+                    },
+                    KeyCode::Down => if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx < app::FONT_SIZES.len() - 1 {
+                        app.font_size_idx += 1;
+                    },
+
+                    // Number keys for tab selection
+                    KeyCode::Char('1') => app.active_tab = ActiveTab::Input,
+                    KeyCode::Char('2') => app.active_tab = ActiveTab::Conversions,
+                    KeyCode::Char('3') => app.active_tab = ActiveTab::Contrast,
+                    KeyCode::Char('4') => app.active_tab = ActiveTab::Preview,
+
+                    _ => {},
+                }
+            }
+        }
+
+        if last_tick.elapsed() >= tick_rate {
+            last_tick = Instant::now();
+        }
+    }
+}
 
                     // Enter to submit input
                     KeyCode::Enter => {
