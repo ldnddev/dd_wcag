@@ -85,7 +85,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
 
                     // Enter to submit input
                     KeyCode::Enter => {
-een app.submit_input();
+                        app.submit_input();
                     }
 
                     // Char input for current field
