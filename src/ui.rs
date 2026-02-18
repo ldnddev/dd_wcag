@@ -1,224 +1,381 @@
-//! # UI Module (Phase 1)
+//! # UI Module
 //!
-//! This module handles rendering the TUI using Ratatui.
-//! In Phase 1, it renders an empty frame with a title block
-//! and a basic help bar at the bottom.
+//! Renders the application's inputs, tabbed content, and help bar.
 
+use crate::app::{ActiveTab, App, InputTarget};
 use ratatui::{
-    backend::Backend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Tabs, Wrap},
     Frame,
 };
 
-// Main render function (updated for Phase 2 basic layout)
 pub fn render(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
-    // Vertical split: inputs (top), preview/contrast (middle), help (bottom)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
-            Constraint::Min(10),
-            Constraint::Length(3),
+            Constraint::Length(6),
+            Constraint::Min(8),
+            Constraint::Length(2),
         ])
         .split(size);
 
-    // Top: Input area
     render_inputs(frame, app, chunks[0]);
+    render_middle(frame, app, chunks[1]);
+    render_help(frame, app, chunks[2]);
 
-    // Middle: Preview and simple contrast table
-    render_preview_and_contrast(frame, app, chunks[1]);
-
-    // Bottom: Help bar (updated with more keys)
-    render_help(frame, chunks[2]);
-}
-
-// Renders FG/BG input fields with current values and active indicator
-fn makerender_inputs(frame: &mut Frame, app: &App, area: Rect) {
-    let input_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Length(2)])
-        .split(area);
-
-    // Foreground
-    let fg_title = if app.input_target == InputTarget::Foreground { "FG (active)" } else { "FG" };
-    let fg_block = Block::default().title(fg_title).borders(Borders::ALL);
-    let fg_content = if app.input_target == InputTarget::Foreground {
-        app.current_input.clone()
-    } else {
-        app.foreground.to_hex()
-    };
-    let fg_text = Paragraph::new(fg_content);
-    frame.render_widget(fg_text.block(fg_block), input_chunks[0]);
-
-    // Background
-    let bg_title = if app.input_target == InputTarget::Background { "BG (active)" } else { "BG" };
-    let bg_block = Block::default().title(bg_title).borders(Borders::ALL);
-    let bg_content = if app.input_target == InputTarget::Background {
-        app.current_input.clone()
-    } else {
-        app.background.to_hex()
-    };
-    let bg_text = Paragraph::new(bg_content);
-    frame.render_widget(bg_text.block(bg_block), input_chunks[1]);
-}
-
-// Updated for Phase 3: Add full contrast table with ratio/pass and green/red styling
-fn render_preview_and_contrast(frame: &mut Frame, app: &App, area: Rect) {
-    let middle_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .split(area);
-
-    // Preview (unchanged)
-    let mut preview_style = Style::default();
-    if let (Some(fg), Some(bg)) = (app.parsed_fg, app.parsed_bg) {
-        preview_style = fg.to_style().bg(bg.to_style().fg.unwrap_or(Color::Black));
-    }
-    if app.is_bold {
-        preview_style = preview_style.add_modifier(Modifier::BOLD);
-    }
-    let preview = Paragraph::new(app.preview_text.as_str())
-        .style(preview_style)
-        .block(Block::default().title("Preview").borders(Borders::ALL));
-    frame.render_widget(preview, middle_chunks[0]);
-
-    // Full contrast table with columns: Size | Normal Ratio | Normal Pass | Bold Ratio | Bold Pass
-    let mut table_lines = vec![
-        Line::from(vec![
-            Span::raw("Size"),
-            Span::raw(" | "),
-            Span::raw("Normal Ratio"),
-            Span::raw(" | "),
-            Span::raw("Normal Pass"),
-            Span::raw(" | "),
-            Span::raw("Bold Ratio"),
-            Span::raw(" | "),
-            Span::raw("Bold Pass"),
+    if let Some(error) = &app.error {
+        let popup = centered_rect(size, 50, 20);
+        let error_widget = Paragraph::new(vec![
+            Line::from(error.as_str()),
+            Line::from(""),
+            Line::from("Press Esc to dismiss."),
         ])
+            .block(
+                Block::default()
+                    .title("Error (Esc closes)")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Red)),
+            )
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+        frame.render_widget(error_widget, popup);
+    }
+
+    if app.error.is_none() {
+        if let Some((x, y)) = input_cursor_position(size, app) {
+            frame.set_cursor_position((x, y));
+        }
+    }
+}
+
+fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .split(area);
+
+    let fg_active = app.input_target == InputTarget::Foreground;
+    let fg_title = if fg_active { "FG (active)" } else { "FG" };
+    let fg_text = if fg_active {
+        app.current_input.clone()
+    } else {
+        app.foreground_input.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(fg_text).block(
+            Block::default()
+                .title(fg_title)
+                .borders(Borders::ALL)
+                .border_style(if fg_active {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                }),
+        ),
+        rows[0],
+    );
+
+    let bg_active = app.input_target == InputTarget::Background;
+    let bg_title = if bg_active { "BG (active)" } else { "BG" };
+    let bg_text = if bg_active {
+        app.current_input.clone()
+    } else {
+        app.background_input.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(bg_text).block(
+            Block::default()
+                .title(bg_title)
+                .borders(Borders::ALL)
+                .border_style(if bg_active {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                }),
+        ),
+        rows[1],
+    );
+}
+
+fn render_middle(frame: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
+        .split(area);
+
+    let titles = ["Input", "Conversions", "Contrast", "Preview"];
+    let selected = match app.active_tab {
+        ActiveTab::Input => 0,
+        ActiveTab::Conversions => 1,
+        ActiveTab::Contrast => 2,
+        ActiveTab::Preview => 3,
+    };
+
+    let tabs = Tabs::new(titles)
+        .select(selected)
+        .block(Block::default().borders(Borders::ALL).title("Tabs"))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    frame.render_widget(tabs, chunks[0]);
+
+    match app.active_tab {
+        ActiveTab::Input => render_input_tab(frame, app, chunks[1]),
+        ActiveTab::Conversions => render_conversions_tab(frame, app, chunks[1]),
+        ActiveTab::Contrast => render_contrast_tab(frame, app, chunks[1]),
+        ActiveTab::Preview => render_preview_tab(frame, app, chunks[1]),
+    }
+}
+
+fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
+    let target = match app.input_target {
+        InputTarget::Foreground => "Foreground",
+        InputTarget::Background => "Background",
+        InputTarget::PreviewText => "Preview Text",
+        InputTarget::None => "None",
+    };
+
+    let mut body = vec![
+        Line::from(format!("Current target: {target}")),
+        Line::from("Current input:"),
     ];
 
-    for size in app::FONT_SIZES {
-        let ratio = app.contrast_ratio;
-        let normal_pass = app.passes_aa(size, false, ratio);
-        let bold_pass = app.passes_aa(size, true, ratio);
+    body.extend(app.current_input.lines().map(Line::from));
+    if app.current_input.is_empty() {
+        body.push(Line::from(""));
+    }
 
-        let normal_ratio_span = Span::styled(format!("{:.2}", ratio), 
-            if normal_pass { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) });
-        let bold_ratio_span = Span::styled(format!("{:.2}", ratio), 
-            if bold_pass { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) });
-        let normal_pass_span =Span::styled(if normal_pass { "PASS" } else { "FAIL" },
-            if normal_pass { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) });
-        let bold_pass_span = Span::styled(if bold_pass { "PASS" } else { "FAIL" },
-            if bold_pass { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) });
+    body.push(Line::from(""));
+    body.push(Line::from("Preview text:"));
+    body.extend(app.preview_text.lines().map(Line::from));
+    if app.preview_text.is_empty() {
+        body.push(Line::from(""));
+    }
 
-        table_lines.push(Line::from(vec![
-            Span::raw(format!("{}px", size)),
-            Span::raw(" | "),
-            normal_ratio_span,
-            Span::raw(" | "),
-            normal_pass_span,
-            Span::raw(" | "),
-            bold_ratio_span,
-            Span::raw(" | "),
-            bold_pass_span,
+    body.push(Line::from(""));
+    body.push(Line::from(format!(
+        "Last parsed format: {}",
+        app.last_parsed_format.as_deref().unwrap_or("-")
+    )));
+
+    frame.render_widget(
+        Paragraph::new(body).block(Block::default().title("Input").borders(Borders::ALL)),
+        area,
+    );
+}
+
+fn render_conversions_tab(frame: &mut Frame, app: &App, area: Rect) {
+    let lines = vec![
+        Line::from("Format | Foreground | Background"),
+        Line::from(format!(
+            "Hex | {} | {}",
+            app.foreground.to_hex(),
+            app.background.to_hex()
+        )),
+        Line::from(format!(
+            "RGB | {} | {}",
+            app.foreground.to_rgb_str(),
+            app.background.to_rgb_str()
+        )),
+        Line::from(format!(
+            "HSL | {} | {}",
+            app.foreground.to_hsl_str(),
+            app.background.to_hsl_str()
+        )),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().title("Conversions").borders(Borders::ALL)),
+        area,
+    );
+}
+
+fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
+    let size = app.font_size_px as f32;
+    let ratio = app.contrast_ratio;
+    let weight = if app.is_bold { "bold" } else { "normal" };
+    let current_pass = app.passes_aa(size, app.is_bold, ratio);
+    let current_threshold = if (app.is_bold && size >= 14.0) || (!app.is_bold && size >= 18.0) {
+        "3.0"
+    } else {
+        "4.5"
+    };
+
+    let mut lines = vec![
+        Line::from("Current Result"),
+        Line::from(vec![
+            Span::raw(format!(
+                "{size:.0}px {weight} | ratio {ratio:.2} | needs >= {current_threshold} | "
+            )),
+            Span::styled(
+                if current_pass { "PASS" } else { "FAIL" },
+                Style::default().fg(if current_pass { Color::Green } else { Color::Red }),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(format!("Quick Reference ({weight})")),
+        Line::from("Size | Ratio | Result"),
+    ];
+
+    for quick_size in [12.0_f32, 14.0, 16.0, 18.0] {
+        let quick_pass = app.passes_aa(quick_size, app.is_bold, ratio);
+        lines.push(Line::from(vec![
+            Span::raw(format!("{quick_size:.0}px | {ratio:.2} | ")),
+            Span::styled(
+                if quick_pass { "PASS" } else { "FAIL" },
+                Style::default().fg(if quick_pass { Color::Green } else { Color::Red }),
+            ),
         ]));
     }
 
-    let table = Paragraph::new(table_lines)
-        .block(Block::default().title("Full Contrast Table").borders(Borders::ALL));
-    frame.render_widget(table, middle_chunks[1]);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().title("Contrast").borders(Borders::ALL)),
+        area,
+    );
 }
+
+fn render_preview_tab(frame: &mut Frame, app: &App, area: Rect) {
+    let mut style = app.foreground.to_style().bg(app.background.to_tui_color());
+    let font_size = app.font_size_px;
+    let weight = if app.is_bold { "bold" } else { "normal" };
+
     if app.is_bold {
-        preview_style = preview_style.add_modifier(Modifier::BOLD);
+        style = style.add_modifier(Modifier::BOLD);
     }
-    let preview = Paragraph::new(app.preview_text.as_str())
-        .style(preview_style)
-        .block(Block::default().title("Preview").borders(Borders::ALL));
-    frame.render_widget(preview, middle_chunks[0]);
 
-    // Simple contrast table (plain text for now)
-    let mut table_lines = vec![
-        Line::from("Size | Normal Pass | Bold Pass")
-    ];
-    for size in app::FONT_SIZES {
-        let normal_pass = if app.passes_aa(size, false, app.contrast_ratio) { "PASS" } else { "FAIL" };
-        let bold_pass = if app.passes_aa(size, true, app.contrast_ratio) { "PASS" } else { "FAIL" };
-        table_lines.push(Line::from(format!("{}px | {} | {}", size, normal-pass, bold_pass)));
-    }
-    let table = Paragraph::new(table_lines) 
-        .block(Block::default().title(format("Contrast: {:.2}", app.contrast_ratio)).borders(Borders::ALL));
-    frame.render_widget(table, middle_chunks[1]);
+    frame.render_widget(
+        Paragraph::new(app.preview_text.as_str())
+            .style(style)
+            .block(
+                Block::default()
+                    .title(format!("Preview ({font_size}px, {weight})"))
+                    .borders(Borders::ALL),
+            ),
+        area,
+    );
 }
 
-// Help bar (improved with more details)
-fn render_help(frame: &mut Frame, area: Rect) {
-    let help_text = "Tab: switch FG/BG (in Input) or tabs (other) | Enter: edit/input | Arrow: size (in Preview/Contrast) | B: toggle bold | 1-4: tabs | q/Esc: quit";
-    let help = Paragraph::new(help_text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .block(Block::default(). VERY borders(Borders::TOP).title("Help"));
+fn render_help(frame: &mut Frame, app: &App, area: Rect) {
+    let focus = match app.active_tab {
+        ActiveTab::Input => match app.input_target {
+            InputTarget::Foreground => "Input > FG",
+            InputTarget::Background => "Input > BG",
+            InputTarget::PreviewText => "Input > PreviewText",
+            InputTarget::None => "Input",
+        },
+        ActiveTab::Conversions => "Conversions",
+        ActiveTab::Contrast => "Contrast",
+        ActiveTab::Preview => "Preview",
+    };
+
+    let help = Paragraph::new(format!(
+        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Enter: newline (PreviewText) | Left/Right: move cursor | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview (/tmp/dd_wcag_preview.html) | Ctrl+Q/Esc: quit"
+    ))
+    .alignment(Alignment::Center)
+    .block(Block::default().borders(Borders::TOP));
     frame.render_widget(help, area);
 }
 
-// Error popup if present
-if Stow let Some(error) = &app.error {
-    let error_area = Rect::new((size.width - 40) / 2, (size.height - 5) / 2, 40, 5);
-    frame.render_widget(Clear, error_area);
-    let error_block = Block::default().title("Error").borders(Borders::ALL).style(Style Landsat::default().fg(Color::Red));
-    let error_p = Paragraph::new(error.as_str()).wrap(Wrap { trim: true }).alignment(Alignment::Center).block(error_block);
-    frame.render_widget(error_p, error_area);
-}
-
-// Renders preview paragraph and simple contrast table
-fn render_preview_and_contrast(frame: &mut Frame, app: &App, area: Rect) {
-    let middle_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
         .split(area);
 
-    // Preview
-    let preview_style = if let (Some(fg), Some(bg)) = (app.parsed_fg, app.parsed_bg) {
-        fg.to_style().bg(bg.to_style().fg) // Simplified for basic preview
-    } else {
-        Style::default()
-    };
-    if app.is_bold {
-        preview_style = preview_style.add_modifier(Modifier::BOLD);
-    }
-    let preview = Paragraph::new(app.preview_text.as_str())
-        .style(preview_style)
-        .block(Block::default().title("Preview").borders(Borders::ALL));
-    frame.render_widget(preview, middle_chunks[0]);
-
-    // Simple contrast table
-    let table_text = format!(
-        "Ratio: {:.2}\nPass AA: {}",
-        app.contrast_ratio,
-        if app.passes_aa(
-            app::FONT_SIZES[app.font_size_idx],
-            app.is_bold,
-            app.contrast_ratio
-        ) {
-            "Yes"
-        } else {
-            "No"
-        }
-    );
-    let table =
-        Paragraph::new(table_text).block(Block::default().title("Contrast").borders(Borders::ALL));
-    frame.render_widget(table, middle_chunks[1]);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
-// Updated help bar with Phase 2 keys
-fn render_help(frame: &mut Frame, area: Rect) {
-    let help_text =
-        Line::from("Tab: switch FG/BG | Enter: submit | Arrows: size | B: bold | q/Esc: quit");
-    let help = Paragraph::new(help_text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .block(Block::default().borders(Borders::TOP));
-    frame.render_widget(help, area);
+fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
+    if app.active_tab != ActiveTab::Input || app.input_target == InputTarget::None {
+        return None;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
+        .split(size);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .split(chunks[0]);
+
+    let middle = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
+        .split(chunks[1]);
+    let input_tab_area = middle[1];
+
+    let (cursor_row, cursor_col) = app.cursor_line_col();
+
+    let (base_x, base_y, max_x, max_y) = match app.input_target {
+        InputTarget::Foreground => (
+            rows[0].x.saturating_add(1),
+            rows[0].y.saturating_add(1),
+            rows[0]
+                .x
+                .saturating_add(rows[0].width.saturating_sub(2)),
+            rows[0]
+                .y
+                .saturating_add(rows[0].height.saturating_sub(2)),
+        ),
+        InputTarget::Background => (
+            rows[1].x.saturating_add(1),
+            rows[1].y.saturating_add(1),
+            rows[1]
+                .x
+                .saturating_add(rows[1].width.saturating_sub(2)),
+            rows[1]
+                .y
+                .saturating_add(rows[1].height.saturating_sub(2)),
+        ),
+        InputTarget::PreviewText => (
+            input_tab_area
+                .x
+                .saturating_add(1)
+                .saturating_add(0),
+            input_tab_area.y.saturating_add(3),
+            input_tab_area
+                .x
+                .saturating_add(input_tab_area.width.saturating_sub(2)),
+            input_tab_area
+                .y
+                .saturating_add(input_tab_area.height.saturating_sub(2)),
+        ),
+        InputTarget::None => return None,
+    };
+
+    let (x, y) = if app.input_target == InputTarget::PreviewText {
+        let width = input_tab_area.width.saturating_sub(2).max(1);
+        let wrapped_rows = cursor_col / width;
+        let wrapped_col = cursor_col % width;
+        let y = base_y
+            .saturating_add(cursor_row)
+            .saturating_add(wrapped_rows)
+            .min(max_y);
+        let x = base_x.saturating_add(wrapped_col).min(max_x);
+        (x, y)
+    } else {
+        let x = base_x.saturating_add(cursor_col).min(max_x);
+        (x, base_y)
+    };
+
+    Some((x, y))
 }
