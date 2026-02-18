@@ -271,7 +271,7 @@ fn render_help(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let help = Paragraph::new(format!(
-        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Enter: newline (PreviewText) | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview | Ctrl+Q/Esc: quit"
+        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Enter: newline (PreviewText) | Left/Right: move cursor | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview (/tmp/dd_wcag_preview.html) | Ctrl+Q/Esc: quit"
     ))
     .alignment(Alignment::Center)
     .block(Block::default().borders(Borders::TOP));
@@ -323,13 +323,7 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
         .split(chunks[1]);
     let input_tab_area = middle[1];
 
-    let text_line_count = app.current_input.lines().count().max(1) as u16;
-    let last_line_len = app
-        .current_input
-        .lines()
-        .last()
-        .map(|line| line.chars().count() as u16)
-        .unwrap_or(0);
+    let (cursor_row, cursor_col) = app.cursor_line_col();
 
     let (base_x, base_y, max_x, max_y) = match app.input_target {
         InputTarget::Foreground => (
@@ -369,13 +363,17 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
     };
 
     let (x, y) = if app.input_target == InputTarget::PreviewText {
+        let width = input_tab_area.width.saturating_sub(2).max(1);
+        let wrapped_rows = cursor_col / width;
+        let wrapped_col = cursor_col % width;
         let y = base_y
-            .saturating_add(text_line_count.saturating_sub(1))
+            .saturating_add(cursor_row)
+            .saturating_add(wrapped_rows)
             .min(max_y);
-        let x = base_x.saturating_add(last_line_len).min(max_x);
+        let x = base_x.saturating_add(wrapped_col).min(max_x);
         (x, y)
     } else {
-        let x = base_x.saturating_add(last_line_len).min(max_x);
+        let x = base_x.saturating_add(cursor_col).min(max_x);
         (x, base_y)
     };
 

@@ -180,7 +180,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
         KeyCode::Char(c) => {
             if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
-                app.current_input.push(c);
+                app.insert_char_at_cursor(c);
                 app.sync_active_input();
                 if app.input_target == InputTarget::PreviewText {
                     effects.sync_preview = true;
@@ -190,7 +190,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
         KeyCode::Backspace => {
             if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
-                app.current_input.pop();
+                app.backspace_at_cursor();
                 app.sync_active_input();
                 if app.input_target == InputTarget::PreviewText {
                     effects.sync_preview = true;
@@ -200,9 +200,21 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
         KeyCode::Enter => {
             if app.active_tab == ActiveTab::Input && app.input_target == InputTarget::PreviewText {
-                app.current_input.push('\n');
+                app.insert_newline_at_cursor();
                 app.sync_active_input();
                 effects.sync_preview = true;
+            }
+        }
+
+        KeyCode::Left => {
+            if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+                app.move_cursor_left();
+            }
+        }
+
+        KeyCode::Right => {
+            if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+                app.move_cursor_right();
             }
         }
 
@@ -345,11 +357,31 @@ mod tests {
         app.active_tab = ActiveTab::Input;
         app.set_input_target(InputTarget::PreviewText);
         app.current_input = "Line 1".to_string();
+        app.cursor_char_idx = app.current_input.chars().count();
 
         let effects = handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(app.current_input, "Line 1\n");
         assert_eq!(app.preview_text, "Line 1\n");
         assert!(effects.sync_preview);
+    }
+
+    #[test]
+    fn left_right_move_cursor_and_char_inserts_at_cursor() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Input;
+        app.set_input_target(InputTarget::PreviewText);
+        app.current_input = "ab".to_string();
+        app.cursor_char_idx = 2;
+
+        handle_key_event(&mut app, key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.cursor_char_idx, 1);
+
+        handle_key_event(&mut app, key(KeyCode::Char('X'), KeyModifiers::NONE));
+        assert_eq!(app.current_input, "aXb");
+        assert_eq!(app.cursor_char_idx, 2);
+
+        handle_key_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cursor_char_idx, 3);
     }
 }

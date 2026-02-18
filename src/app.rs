@@ -34,6 +34,7 @@ pub struct App {
     pub background_input: String,
     pub input_target: InputTarget,
     pub current_input: String,
+    pub cursor_char_idx: usize,
     pub parsed_fg: Option<Color>,
     pub parsed_bg: Option<Color>,
     pub last_parsed_format: Option<String>,
@@ -57,6 +58,7 @@ impl App {
             background_input: background.to_hex(),
             input_target: InputTarget::Foreground,       // Start with FG active
             current_input: foreground.to_hex(),
+            cursor_char_idx: foreground.to_hex().chars().count(),
             parsed_fg: None,
             parsed_bg: None,
             last_parsed_format: None,
@@ -82,6 +84,7 @@ impl App {
             InputTarget::PreviewText => self.preview_text.clone(),
             InputTarget::None => String::new(),
         };
+        self.cursor_char_idx = self.current_input.chars().count();
     }
 
     pub fn sync_active_input(&mut self) {
@@ -91,6 +94,69 @@ impl App {
             InputTarget::PreviewText => self.preview_text = self.current_input.clone(),
             InputTarget::None => {}
         }
+    }
+
+    fn clamp_cursor(&mut self) {
+        let len = self.current_input.chars().count();
+        if self.cursor_char_idx > len {
+            self.cursor_char_idx = len;
+        }
+    }
+
+    fn byte_index_at_char(s: &str, char_idx: usize) -> usize {
+        s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor_char_idx > 0 {
+            self.cursor_char_idx -= 1;
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        let len = self.current_input.chars().count();
+        if self.cursor_char_idx < len {
+            self.cursor_char_idx += 1;
+        }
+    }
+
+    pub fn insert_char_at_cursor(&mut self, c: char) {
+        self.clamp_cursor();
+        let byte_idx = Self::byte_index_at_char(&self.current_input, self.cursor_char_idx);
+        self.current_input.insert(byte_idx, c);
+        self.cursor_char_idx += 1;
+    }
+
+    pub fn insert_newline_at_cursor(&mut self) {
+        self.insert_char_at_cursor('\n');
+    }
+
+    pub fn backspace_at_cursor(&mut self) {
+        self.clamp_cursor();
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+        let end = Self::byte_index_at_char(&self.current_input, self.cursor_char_idx);
+        let start = Self::byte_index_at_char(&self.current_input, self.cursor_char_idx - 1);
+        self.current_input.replace_range(start..end, "");
+        self.cursor_char_idx -= 1;
+    }
+
+    pub fn cursor_line_col(&self) -> (u16, u16) {
+        let mut row: u16 = 0;
+        let mut col: u16 = 0;
+        for (i, ch) in self.current_input.chars().enumerate() {
+            if i >= self.cursor_char_idx {
+                break;
+            }
+            if ch == '\n' {
+                row = row.saturating_add(1);
+                col = 0;
+            } else {
+                col = col.saturating_add(1);
+            }
+        }
+        (row, col)
     }
 
     // Updates contrast ratio if both colors are parsed
@@ -115,6 +181,7 @@ impl App {
         if self.input_target == InputTarget::PreviewText {
             self.preview_text = self.current_input.clone();
             self.error = None;
+            self.clamp_cursor();
             return true;
         }
 
@@ -178,11 +245,13 @@ impl App {
                 self.last_parsed_format = Some(format_label);
                 self.error = None;
                 self.update_contrast();
+                self.clamp_cursor();
                 true
             }
             Err(err) => {
                 self.error = Some(err);
                 self.last_parsed_format = None;
+                self.clamp_cursor();
                 false
             }
         }
@@ -277,8 +346,25 @@ mod tests {
         let mut app = App::new();
         app.set_input_target(InputTarget::PreviewText);
         app.current_input = "Custom preview sample".to_string();
+        app.cursor_char_idx = app.current_input.chars().count();
         app.sync_active_input();
         assert!(app.submit_input());
         assert_eq!(app.preview_text, "Custom preview sample");
+    }
+
+    #[test]
+    fn cursor_insert_and_backspace_edit_at_position() {
+        let mut app = App::new();
+        app.set_input_target(InputTarget::PreviewText);
+        app.current_input = "ab".to_string();
+        app.cursor_char_idx = 1;
+
+        app.insert_char_at_cursor('X');
+        assert_eq!(app.current_input, "aXb");
+        assert_eq!(app.cursor_char_idx, 2);
+
+        app.backspace_at_cursor();
+        assert_eq!(app.current_input, "ab");
+        assert_eq!(app.cursor_char_idx, 1);
     }
 }
