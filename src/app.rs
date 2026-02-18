@@ -137,3 +137,71 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjust_font_size_clamps_to_bounds() {
+        let mut app = App::new();
+        assert_eq!(app.font_size_px, 12);
+
+        app.adjust_font_size(-200);
+        assert_eq!(app.font_size_px, 6);
+
+        app.adjust_font_size(500);
+        assert_eq!(app.font_size_px, 120);
+    }
+
+    #[test]
+    fn submit_input_updates_foreground_and_background() {
+        let mut app = App::new();
+
+        app.set_input_target(InputTarget::Foreground);
+        app.current_input = "#00ff00".to_string();
+        assert!(app.submit_input());
+        assert_eq!(app.foreground.to_hex(), "#00ff00");
+        assert_eq!(app.foreground_input, "#00ff00");
+
+        app.set_input_target(InputTarget::Background);
+        app.current_input = "rgb(255,0,0)".to_string();
+        assert!(app.submit_input());
+        assert_eq!(app.background.to_hex(), "#ff0000");
+        assert_eq!(app.background_input, "rgb(255,0,0)");
+    }
+
+    #[test]
+    fn invalid_submit_does_not_change_committed_color() {
+        let mut app = App::new();
+        let original = app.foreground.to_hex();
+
+        app.set_input_target(InputTarget::Foreground);
+        app.current_input = "not-a-color".to_string();
+        assert!(!app.submit_input());
+        assert_eq!(app.foreground.to_hex(), original);
+        assert!(app.error.is_some());
+    }
+
+    #[test]
+    fn tab_apply_flow_keeps_independent_field_drafts() {
+        let mut app = App::new();
+
+        app.current_input = "hsl(120,100,50)".to_string();
+        app.sync_active_input();
+        assert!(app.submit_input());
+        app.set_input_target(InputTarget::Background);
+
+        assert_eq!(app.foreground.to_hex(), "#00ff00");
+        assert_eq!(app.foreground_input, "hsl(120,100,50)");
+
+        app.current_input = "rgba(0,0,255,0.8)".to_string();
+        app.sync_active_input();
+        assert!(app.submit_input());
+        app.set_input_target(InputTarget::Foreground);
+
+        assert_eq!(app.background.to_hex(), "#0000ff");
+        assert_eq!(app.background_input, "rgba(0,0,255,0.8)");
+        assert_eq!(app.current_input, "hsl(120,100,50)");
+    }
+}
