@@ -25,7 +25,7 @@ dd_wcag is a TUI CSS color picker/converter with WCAG 2.1 AA contrast checker. B
 - `parsed_fg`, `parsed_bg`: Option<Color>
 - `contrast_ratio`: f64
 - `preview_text`: String (editable sample text)
-- `font_size_idx`: usize (index into [12.0, 14.0, 16.0, 18.0])
+- `font_size_px`: u16 (current preview size in px, range 6..=120)
 - `is_bold`: bool
 - `error`: Option<String>
 - `active_tab`: Enum { Input, Conversions, Contrast, Preview }
@@ -42,14 +42,14 @@ dd_wcag is a TUI CSS color picker/converter with WCAG 2.1 AA contrast checker. B
 - WCAG 2.1 AA thresholds:
   - Normal text: ≥4.5:1
   - Large text (≥18px normal or ≥14px bold): ≥3:1
-- Font sizes: [12.0, 14.0, 16.0, 18.0] px
+- Font size: adjustable 6px..120px, default 12px
 - `passes_aa(size: f32, bold: bool, ratio: f64) → bool`
 
 ### UI Layout (ui.rs)
 - Vertical split:
   - Top: Input area (FG/BG fields, active indicator)
   - Middle: Tabs (Input / Conversions / Contrast / Preview)
-  - Bottom: Help bar ("Tab: switch FG/BG | Enter: edit | Arrow: size | B: toggle bold | q/Esc: quit")
+  - Bottom: Help bar ("Tab/Shift+Tab: cycle all fields (auto-apply FG/BG) | Ctrl+Up/Down: size | Ctrl+B: toggle bold | Ctrl+Q/Esc: quit")
 - Widgets:
   - Text input fields
   - Conversions Table: (Format | Value)
@@ -77,9 +77,9 @@ dd_wcag is a TUI CSS color picker/converter with WCAG 2.1 AA contrast checker. B
 
 ### Phase 2 – MVP (usable core)
 8. color.rs: add rgb/hsl parse, to_rgb_str(), to_hsl_str(), contrast_ratio()  
-9. app.rs: App struct with fg, bg, input_target, current_input, contrast_ratio, font_size_idx, is_bold  
+9. app.rs: App struct with fg, bg, input_target, current_input, contrast_ratio, font_size_px, is_bold  
 10. app.rs: update_contrast(), passes_aa() logic  
-11. main.rs: handle keys (tab switch FG/BG, chars/enter for input, B toggle bold, arrows cycle size, q/Esc quit)  
+11. main.rs: handle keys (Tab/Shift+Tab cycle all fields and auto-apply FG/BG input, Ctrl+B toggle bold, Ctrl+Up/Down cycle size, Ctrl+Q/Esc quit)  
 12. ui.rs: basic layout (top inputs, preview paragraph, simple contrast table)  
 13. Parse on enter, show preview with FG/BG styles  
 14. Commit: "Phase 2: MVP – color input, preview, basic contrast table"  

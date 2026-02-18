@@ -4,7 +4,7 @@
 //! All methods are documented for learning.
 
 use anyhow::{anyhow, Result};
-use palette::{FromColor, Hsl, IntoColor, LinSrgb, RgbHue, Srgb};
+use palette::{Hsl, IntoColor, LinSrgb, Srgb};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color(pub Srgb);
@@ -17,15 +17,23 @@ impl Color {
             return Err(anyhow!("Invalid hex length: must be 3 or 6 digits"));
         }
 
-        let (r_str, g_str, b_str) = if len == 3 {
-            (&s[0..1].repeat(2), &s[1..2].repeat(2), &s[2..3].repeat(2))
+        let (r_str, g_str, b_str): (String, String, String) = if len == 3 {
+            (
+                s[0..1].repeat(2),
+                s[1..2].repeat(2),
+                s[2..3].repeat(2),
+            )
         } else {
-            (&s[0..2], &s[2..4], &s[4..6])
+            (
+                s[0..2].to_string(),
+                s[2..4].to_string(),
+                s[4..6].to_string(),
+            )
         };
 
-        let r = u8::from_str_radix(r_str, 16)?;
-        let g = u8::from_str_radix(g_str, 16)?;
-        let b = u8::from_str_radix(b_str, 16)?;
+        let r = u8::from_str_radix(&r_str, 16)?;
+        let g = u8::from_str_radix(&g_str, 16)?;
+        let b = u8::from_str_radix(&b_str, 16)?;
 
         Ok(Color(Srgb::new(
             r as f32 / 255.0,
@@ -35,15 +43,29 @@ impl Color {
     }
 
     pub fn parse_rgb(s: &str) -> Result<Self> {
-        let s = s.trim().to_lowercase().replace("rgb(", "").replace(")", "");
-        let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
-        if parts.len() != 3 {
-            return Err(anyhow!("Invalid RGB format"));
+        let normalized = s.trim().to_lowercase();
+        let raw = if normalized.starts_with("rgba(") && normalized.ends_with(')') {
+            &normalized[5..normalized.len() - 1]
+        } else if normalized.starts_with("rgb(") && normalized.ends_with(')') {
+            &normalized[4..normalized.len() - 1]
+        } else {
+            normalized.as_str()
+        };
+
+        let parts: Vec<&str> = raw.split(',').map(|p| p.trim()).collect();
+        if parts.len() != 3 && parts.len() != 4 {
+            return Err(anyhow!("Invalid RGB/RGBA format"));
         }
 
         let r = parts[0].parse::<u8>()? as f32 / 255.0;
         let g = parts[1].parse::<u8>()? as f32 / 255.0;
         let b = parts[2].parse::<u8>()? as f32 / 255.0;
+        if parts.len() == 4 {
+            let alpha = parts[3].parse::<f32>()?;
+            if !(0.0..=1.0).contains(&alpha) {
+                return Err(anyhow!("RGBA alpha must be between 0 and 1"));
+            }
+        }
 
         Ok(Color(Srgb::new(r, g, b)))
     }
@@ -110,6 +132,14 @@ impl Color {
             (self.0.blue * 255.0) as u8,
         ))
     }
+
+    pub fn to_tui_color(&self) -> ratatui::style::Color {
+        ratatui::style::Color::Rgb(
+            (self.0.red * 255.0) as u8,
+            (self.0.green * 255.0) as u8,
+            (self.0.blue * 255.0) as u8,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +164,11 @@ mod tests {
 
         let color = Color::parse_rgb("0,255,0").unwrap();
         assert_eq!(color.0.green, 1.0);
+
+        let color = Color::parse_rgb("rgba(0,0,255,0.5)").unwrap();
+        assert_eq!(color.0.blue, 1.0);
+
+        assert!(Color::parse_rgb("rgba(0,0,255,1.5)").is_err());
     }
 
     #[test]
@@ -151,7 +186,6 @@ mod tests {
         assert_eq!(color.to_hex(), "#ff0000");
     }
 
-    #[test]
     #[test]
     fn test_to_rgb_str() {
         let color = Color(Srgb::new(1.0, 0.0, 0.0));

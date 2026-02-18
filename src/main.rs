@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 mod app;
 mod color;
 mod ui;
+mod web_preview;
 
-use app::{App, InputTarget, ActiveTab};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use app::{ActiveTab, App, InputTarget};
 
 // Main function
 fn main() -> Result<()> {
@@ -29,6 +29,7 @@ fn main() -> Result<()> {
 
     // Create app state
     let mut app = App::new();
+    sync_web_preview(&mut app);
 
     // Run the main loop
     let res = run_loop(&mut terminal, &mut app);
@@ -37,6 +38,12 @@ fn main() -> Result<()> {
     restore_terminal(&mut terminal)?;
 
     res
+}
+
+fn sync_web_preview(app: &mut App) {
+    if let Err(err) = web_preview::sync(app) {
+        app.error = Some(format!("Failed to update web preview: {err}"));
+    }
 }
 
 // Setup terminal (unchanged)
@@ -68,65 +75,136 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or(Duration::ZERO);
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+                if ctrl {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+
+                        KeyCode::Char('b') | KeyCode::Char('B') => {
+                            app.is_bold = !app.is_bold;
+                            sync_web_preview(app);
+                        },
+
+                        KeyCode::Char('o') | KeyCode::Char('O') => {
+                            if let Err(err) = web_preview::open_in_browser() {
+                                app.error = Some(format!(
+                                    "Failed to open browser preview ({}): {err}",
+                                    web_preview::preview_path().display()
+                                ));
+                            }
+                        },
+
+                        KeyCode::Up => {
+                            if app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast {
+                                app.adjust_font_size(1);
+                                sync_web_preview(app);
+                            }
+                        },
+
+                        KeyCode::Down => {
+                            if app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast {
+                                app.adjust_font_size(-1);
+                                sync_web_preview(app);
+                            }
+                        },
+
+                        _ => {},
+                    }
+
+                    continue;
+                }
+
+                match key.code {
                     KeyCode::Tab => {
-                        if app.active_tab == ActiveTab::Input {
-                            app.input_target = match app.input_target {
-                                InputTarget::Foreground => InputTarget::Background,
-                                InputTarget::Background => InputTarget::Foreground,
-                                InputTarget::None => InputTarget::Foreground,
-                            };
-                            app.current_input.clear();
-                        } else {
-                            app.active_tab = match app.active_tab {
-                                ActiveTab::Input => ActiveTab::Conversions,
-                                ActiveTab::Conversions => ActiveTab::Contrast,
-                                ActiveTab::Contrast => ActiveTab::Preview,
-                                ActiveTab::Preview => ActiveTab::Input,
-                            };
+                        match app.active_tab {
+                            ActiveTab::Input => match app.input_target {
+                                InputTarget::Foreground => {
+                                    app.sync_active_input();
+                                    if !app.submit_input() {
+                                        continue;
+                                    }
+                                    sync_web_preview(app);
+                                    app.set_input_target(InputTarget::Background);
+                                }
+                                InputTarget::Background | InputTarget::None => {
+                                    app.sync_active_input();
+                                    if !app.submit_input() {
+                                        continue;
+                                    }
+                                    sync_web_preview(app);
+                                    app.active_tab = ActiveTab::Conversions;
+                                    app.set_input_target(InputTarget::None);
+                                }
+                            },
+                            ActiveTab::Conversions => {
+                                app.active_tab = ActiveTab::Contrast;
+                            }
+                            ActiveTab::Contrast => {
+                                app.active_tab = ActiveTab::Preview;
+                            }
+                            ActiveTab::Preview => {
+                                app.active_tab = ActiveTab::Input;
+                                app.set_input_target(InputTarget::Foreground);
+                            }
                         }
                     },
 
-                    KeyCode::Enter => {
-                        if app.active_tab == ActiveTab::Input {
-                            app.submit_input();
+                    KeyCode::BackTab => {
+                        match app.active_tab {
+                            ActiveTab::Input => match app.input_target {
+                                InputTarget::Background => {
+                                    app.sync_active_input();
+                                    if !app.submit_input() {
+                                        continue;
+                                    }
+                                    sync_web_preview(app);
+                                    app.set_input_target(InputTarget::Foreground);
+                                }
+                                InputTarget::Foreground | InputTarget::None => {
+                                    app.sync_active_input();
+                                    if !app.submit_input() {
+                                        continue;
+                                    }
+                                    sync_web_preview(app);
+                                    app.active_tab = ActiveTab::Preview;
+                                    app.set_input_target(InputTarget::None);
+                                }
+                            },
+                            ActiveTab::Conversions => {
+                                app.active_tab = ActiveTab::Input;
+                                app.set_input_target(InputTarget::Background);
+                            }
+                            ActiveTab::Contrast => {
+                                app.active_tab = ActiveTab::Conversions;
+                            }
+                            ActiveTab::Preview => {
+                                app.active_tab = ActiveTab::Contrast;
+                            }
+                        }
+                    },
+
+                    KeyCode::Esc => {
+                        if app.error.is_some() {
+                            app.error = None;
+                        } else {
+                            return Ok(());
                         }
                     },
 
                     KeyCode::Char(c) => {
                         if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                             app.current_input.push(c);
+                            app.sync_active_input();
                         }
                     },
 
                     KeyCode::Backspace => {
                         if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                             app.current_input.pop();
+                            app.sync_active_input();
                         }
                     },
-
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
-                        app.is_bold = !app.is_bold;
-                    },
-
-                    KeyCode::Up => {
-                        if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx > 0 {
-                            app.font_size_idx -= 1;
-                        }
-                    },
-
-                    KeyCode::Down => {
-                        if (app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast) && app.font_size_idx < app::FONT_SIZES.len() - 1 {
-                            app.font_size_idx += 1;
-                        }
-                    },
-
-                    KeyCode::Char('1') => app.active_tab = ActiveTab::Input,
-                    KeyCode::Char('2') => app.active_tab = ActiveTab::Conversions,
-                    KeyCode::Char('3') => app.active_tab = ActiveTab::Contrast,
-                    KeyCode::Char('4') => app.active_tab = ActiveTab::Preview,
 
                     _ => {},
                 }
@@ -138,4 +216,3 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         }
     }
 }
-
