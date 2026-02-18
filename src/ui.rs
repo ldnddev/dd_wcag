@@ -25,20 +25,30 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     render_inputs(frame, app, chunks[0]);
     render_middle(frame, app, chunks[1]);
-    render_help(frame, chunks[2]);
+    render_help(frame, app, chunks[2]);
 
     if let Some(error) = &app.error {
         let popup = centered_rect(size, 50, 20);
-        let error_widget = Paragraph::new(error.as_str())
+        let error_widget = Paragraph::new(vec![
+            Line::from(error.as_str()),
+            Line::from(""),
+            Line::from("Press Esc to dismiss."),
+        ])
             .block(
                 Block::default()
-                    .title("Error")
+                    .title("Error (Esc closes)")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Red)),
             )
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
         frame.render_widget(error_widget, popup);
+    }
+
+    if app.error.is_none() {
+        if let Some((x, y)) = input_cursor_position(size, app) {
+            frame.set_cursor_position((x, y));
+        }
     }
 }
 
@@ -123,12 +133,18 @@ fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
     let target = match app.input_target {
         InputTarget::Foreground => "Foreground",
         InputTarget::Background => "Background",
+        InputTarget::PreviewText => "Preview Text",
         InputTarget::None => "None",
     };
 
     let body = vec![
         Line::from(format!("Current target: {target}")),
         Line::from(format!("Current input: {}", app.current_input)),
+        Line::from(format!("Preview text: {}", app.preview_text)),
+        Line::from(format!(
+            "Last parsed format: {}",
+            app.last_parsed_format.as_deref().unwrap_or("-")
+        )),
     ];
 
     frame.render_widget(
@@ -164,37 +180,42 @@ fn render_conversions_tab(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
-    let mut lines = vec![Line::from(
-        "Size | Normal Ratio | Normal Pass | Bold Ratio | Bold Pass",
-    )];
-
     let size = app.font_size_px as f32;
     let ratio = app.contrast_ratio;
-    let normal_pass = app.passes_aa(size, false, ratio);
-    let bold_pass = app.passes_aa(size, true, ratio);
+    let weight = if app.is_bold { "bold" } else { "normal" };
+    let current_pass = app.passes_aa(size, app.is_bold, ratio);
+    let current_threshold = if (app.is_bold && size >= 14.0) || (!app.is_bold && size >= 18.0) {
+        "3.0"
+    } else {
+        "4.5"
+    };
 
-    lines.push(Line::from(vec![
-        Span::raw(format!("{size:.0}px | ")),
-        Span::styled(
-            format!("{ratio:.2}"),
-            Style::default().fg(if normal_pass { Color::Green } else { Color::Red }),
-        ),
-        Span::raw(" | "),
-        Span::styled(
-            if normal_pass { "PASS" } else { "FAIL" },
-            Style::default().fg(if normal_pass { Color::Green } else { Color::Red }),
-        ),
-        Span::raw(" | "),
-        Span::styled(
-            format!("{ratio:.2}"),
-            Style::default().fg(if bold_pass { Color::Green } else { Color::Red }),
-        ),
-        Span::raw(" | "),
-        Span::styled(
-            if bold_pass { "PASS" } else { "FAIL" },
-            Style::default().fg(if bold_pass { Color::Green } else { Color::Red }),
-        ),
-    ]));
+    let mut lines = vec![
+        Line::from("Current Result"),
+        Line::from(vec![
+            Span::raw(format!(
+                "{size:.0}px {weight} | ratio {ratio:.2} | needs >= {current_threshold} | "
+            )),
+            Span::styled(
+                if current_pass { "PASS" } else { "FAIL" },
+                Style::default().fg(if current_pass { Color::Green } else { Color::Red }),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(format!("Quick Reference ({weight})")),
+        Line::from("Size | Ratio | Result"),
+    ];
+
+    for quick_size in [12.0_f32, 14.0, 16.0, 18.0] {
+        let quick_pass = app.passes_aa(quick_size, app.is_bold, ratio);
+        lines.push(Line::from(vec![
+            Span::raw(format!("{quick_size:.0}px | {ratio:.2} | ")),
+            Span::styled(
+                if quick_pass { "PASS" } else { "FAIL" },
+                Style::default().fg(if quick_pass { Color::Green } else { Color::Red }),
+            ),
+        ]));
+    }
 
     frame.render_widget(
         Paragraph::new(lines).block(Block::default().title("Contrast").borders(Borders::ALL)),
@@ -223,10 +244,22 @@ fn render_preview_tab(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_help(frame: &mut Frame, area: Rect) {
-    let help = Paragraph::new(
-        "Tab/Shift+Tab: cycle+apply FG/BG | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview | Ctrl+Q/Esc: quit",
-    )
+fn render_help(frame: &mut Frame, app: &App, area: Rect) {
+    let focus = match app.active_tab {
+        ActiveTab::Input => match app.input_target {
+            InputTarget::Foreground => "Input > FG",
+            InputTarget::Background => "Input > BG",
+            InputTarget::PreviewText => "Input > PreviewText",
+            InputTarget::None => "Input",
+        },
+        ActiveTab::Conversions => "Conversions",
+        ActiveTab::Contrast => "Contrast",
+        ActiveTab::Preview => "Preview",
+    };
+
+    let help = Paragraph::new(format!(
+        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview | Ctrl+Q/Esc: quit"
+    ))
     .alignment(Alignment::Center)
     .block(Block::default().borders(Borders::TOP));
     frame.render_widget(help, area);
@@ -250,4 +283,63 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
+    if app.active_tab != ActiveTab::Input || app.input_target == InputTarget::None {
+        return None;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
+        .split(size);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .split(chunks[0]);
+
+    let middle = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
+        .split(chunks[1]);
+    let input_tab_area = middle[1];
+
+    let (base_x, base_y, max_x) = match app.input_target {
+        InputTarget::Foreground => (
+            rows[0].x.saturating_add(1),
+            rows[0].y.saturating_add(1),
+            rows[0]
+                .x
+                .saturating_add(rows[0].width.saturating_sub(2)),
+        ),
+        InputTarget::Background => (
+            rows[1].x.saturating_add(1),
+            rows[1].y.saturating_add(1),
+            rows[1]
+                .x
+                .saturating_add(rows[1].width.saturating_sub(2)),
+        ),
+        InputTarget::PreviewText => (
+            input_tab_area
+                .x
+                .saturating_add(1)
+                .saturating_add("Current input: ".chars().count() as u16),
+            input_tab_area.y.saturating_add(2),
+            input_tab_area
+                .x
+                .saturating_add(input_tab_area.width.saturating_sub(2)),
+        ),
+        InputTarget::None => return None,
+    };
+
+    let x = base_x
+        .saturating_add(app.current_input.chars().count() as u16)
+        .min(max_x);
+    Some((x, base_y))
 }

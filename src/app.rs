@@ -12,6 +12,7 @@ use palette::Srgb;
 pub enum InputTarget {
     Foreground,
     Background,
+    PreviewText,
     None,
 }
 
@@ -35,6 +36,7 @@ pub struct App {
     pub current_input: String,
     pub parsed_fg: Option<Color>,
     pub parsed_bg: Option<Color>,
+    pub last_parsed_format: Option<String>,
     pub contrast_ratio: f64,
     pub preview_text: String,
     pub font_size_px: u16,
@@ -57,6 +59,7 @@ impl App {
             current_input: foreground.to_hex(),
             parsed_fg: None,
             parsed_bg: None,
+            last_parsed_format: None,
             contrast_ratio: 21.0, // Default black on white
             preview_text: "The quick brown fox jumps over the lazy dog.".to_string(),
             font_size_px: 12,
@@ -76,6 +79,7 @@ impl App {
         self.current_input = match target {
             InputTarget::Foreground => self.foreground_input.clone(),
             InputTarget::Background => self.background_input.clone(),
+            InputTarget::PreviewText => self.preview_text.clone(),
             InputTarget::None => String::new(),
         };
     }
@@ -84,6 +88,7 @@ impl App {
         match self.input_target {
             InputTarget::Foreground => self.foreground_input = self.current_input.clone(),
             InputTarget::Background => self.background_input = self.current_input.clone(),
+            InputTarget::PreviewText => self.preview_text = self.current_input.clone(),
             InputTarget::None => {}
         }
     }
@@ -107,12 +112,55 @@ impl App {
             return true;
         }
 
-        let parsed = Color::parse_hex(&self.current_input)
-            .or_else(|_| Color::parse_rgb(&self.current_input))
-            .or_else(|_| Color::parse_hsl(&self.current_input));
+        if self.input_target == InputTarget::PreviewText {
+            self.preview_text = self.current_input.clone();
+            self.error = None;
+            return true;
+        }
 
-        match parsed {
-            Ok(color) => {
+        let input = self.current_input.trim();
+        let lower = input.to_lowercase();
+
+        let parse_result = if lower.starts_with("rgba(") {
+            Color::parse_rgb(input)
+                .map(|color| (color, "RGBA".to_string()))
+                .map_err(|err| format!("Invalid RGBA format: {err}"))
+        } else if lower.starts_with("rgb(") {
+            Color::parse_rgb(input)
+                .map(|color| (color, "RGB".to_string()))
+                .map_err(|err| format!("Invalid RGB format: {err}"))
+        } else if lower.starts_with("hsl(") {
+            Color::parse_hsl(input)
+                .map(|color| (color, "HSL".to_string()))
+                .map_err(|err| format!("Invalid HSL format: {err}"))
+        } else if input.starts_with('#') {
+            Color::parse_hex(input)
+                .map(|color| (color, "HEX".to_string()))
+                .map_err(|err| format!("Invalid HEX format: {err}"))
+        } else {
+            let maybe_hex = input.strip_prefix('#').unwrap_or(input);
+            if !maybe_hex.is_empty()
+                && maybe_hex.len() <= 6
+                && !input.contains('(')
+                && !input.contains(',')
+            {
+                Color::parse_hex(input)
+                    .map(|color| (color, "HEX".to_string()))
+                    .map_err(|err| format!("Invalid HEX format: {err}"))
+            } else {
+                let parsed = Color::parse_hex(input)
+                    .map(|color| (color, "HEX".to_string()))
+                    .or_else(|_| Color::parse_rgb(input).map(|color| (color, "RGB".to_string())))
+                    .or_else(|_| Color::parse_hsl(input).map(|color| (color, "HSL".to_string())));
+                parsed.map_err(|_| {
+                    "Invalid color input. Supported formats: HEX (#rgb/#rrggbb), RGB/RGBA, HSL."
+                        .to_string()
+                })
+            }
+        };
+
+        match parse_result {
+            Ok((color, format_label)) => {
                 match self.input_target {
                     InputTarget::Foreground => {
                         self.foreground = color;
@@ -124,14 +172,17 @@ impl App {
                         self.parsed_bg = Some(color);
                         self.background_input = self.current_input.clone();
                     }
+                    InputTarget::PreviewText => {}
                     InputTarget::None => {}
                 }
+                self.last_parsed_format = Some(format_label);
                 self.error = None;
                 self.update_contrast();
                 true
             }
             Err(err) => {
-                self.error = Some(format!("Invalid color input: {err}"));
+                self.error = Some(err);
+                self.last_parsed_format = None;
                 false
             }
         }
@@ -169,6 +220,11 @@ mod tests {
         assert!(app.submit_input());
         assert_eq!(app.background.to_hex(), "#ff0000");
         assert_eq!(app.background_input, "rgb(255,0,0)");
+        assert_eq!(app.last_parsed_format.as_deref(), Some("RGB"));
+
+        app.current_input = "rgba(0,0,255,0.8)".to_string();
+        assert!(app.submit_input());
+        assert_eq!(app.last_parsed_format.as_deref(), Some("RGBA"));
     }
 
     #[test]
@@ -181,6 +237,17 @@ mod tests {
         assert!(!app.submit_input());
         assert_eq!(app.foreground.to_hex(), original);
         assert!(app.error.is_some());
+    }
+
+    #[test]
+    fn invalid_hex_reports_hex_error() {
+        let mut app = App::new();
+        app.set_input_target(InputTarget::Foreground);
+        app.current_input = "#12zz34".to_string();
+
+        assert!(!app.submit_input());
+        let error = app.error.unwrap_or_default();
+        assert!(error.contains("HEX"));
     }
 
     #[test]
@@ -203,5 +270,15 @@ mod tests {
         assert_eq!(app.background.to_hex(), "#0000ff");
         assert_eq!(app.background_input, "rgba(0,0,255,0.8)");
         assert_eq!(app.current_input, "hsl(120,100,50)");
+    }
+
+    #[test]
+    fn preview_text_target_updates_preview_text() {
+        let mut app = App::new();
+        app.set_input_target(InputTarget::PreviewText);
+        app.current_input = "Custom preview sample".to_string();
+        app.sync_active_input();
+        assert!(app.submit_input());
+        assert_eq!(app.preview_text, "Custom preview sample");
     }
 }
