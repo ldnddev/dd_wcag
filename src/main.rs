@@ -198,6 +198,14 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             }
         }
 
+        KeyCode::Enter => {
+            if app.active_tab == ActiveTab::Input && app.input_target == InputTarget::PreviewText {
+                app.current_input.push('\n');
+                app.sync_active_input();
+                effects.sync_preview = true;
+            }
+        }
+
         _ => {}
     }
 
@@ -329,5 +337,19 @@ mod tests {
 
         let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(quit.quit);
+    }
+
+    #[test]
+    fn enter_in_preview_text_adds_newline_and_syncs_preview() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Input;
+        app.set_input_target(InputTarget::PreviewText);
+        app.current_input = "Line 1".to_string();
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.current_input, "Line 1\n");
+        assert_eq!(app.preview_text, "Line 1\n");
+        assert!(effects.sync_preview);
     }
 }

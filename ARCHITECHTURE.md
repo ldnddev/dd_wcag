@@ -55,6 +55,7 @@ It supports:
   - `Tab` / `Shift+Tab`: cycle across all fields/tabs
   - Leaving `FG` or `BG` auto-applies parsed input
 - Actions:
+  - `Enter`: add newline when focused on `PreviewText`
   - `Ctrl+Up`: increase size by `1px` (max `120`)
   - `Ctrl+Down`: decrease size by `1px` (min `6`)
   - `Ctrl+B`: toggle bold

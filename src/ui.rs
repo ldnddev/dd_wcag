@@ -137,15 +137,28 @@ fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
         InputTarget::None => "None",
     };
 
-    let body = vec![
+    let mut body = vec![
         Line::from(format!("Current target: {target}")),
-        Line::from(format!("Current input: {}", app.current_input)),
-        Line::from(format!("Preview text: {}", app.preview_text)),
-        Line::from(format!(
-            "Last parsed format: {}",
-            app.last_parsed_format.as_deref().unwrap_or("-")
-        )),
+        Line::from("Current input:"),
     ];
+
+    body.extend(app.current_input.lines().map(Line::from));
+    if app.current_input.is_empty() {
+        body.push(Line::from(""));
+    }
+
+    body.push(Line::from(""));
+    body.push(Line::from("Preview text:"));
+    body.extend(app.preview_text.lines().map(Line::from));
+    if app.preview_text.is_empty() {
+        body.push(Line::from(""));
+    }
+
+    body.push(Line::from(""));
+    body.push(Line::from(format!(
+        "Last parsed format: {}",
+        app.last_parsed_format.as_deref().unwrap_or("-")
+    )));
 
     frame.render_widget(
         Paragraph::new(body).block(Block::default().title("Input").borders(Borders::ALL)),
@@ -258,7 +271,7 @@ fn render_help(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let help = Paragraph::new(format!(
-        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview | Ctrl+Q/Esc: quit"
+        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Enter: newline (PreviewText) | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview | Ctrl+Q/Esc: quit"
     ))
     .alignment(Alignment::Center)
     .block(Block::default().borders(Borders::TOP));
@@ -310,13 +323,24 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
         .split(chunks[1]);
     let input_tab_area = middle[1];
 
-    let (base_x, base_y, max_x) = match app.input_target {
+    let text_line_count = app.current_input.lines().count().max(1) as u16;
+    let last_line_len = app
+        .current_input
+        .lines()
+        .last()
+        .map(|line| line.chars().count() as u16)
+        .unwrap_or(0);
+
+    let (base_x, base_y, max_x, max_y) = match app.input_target {
         InputTarget::Foreground => (
             rows[0].x.saturating_add(1),
             rows[0].y.saturating_add(1),
             rows[0]
                 .x
                 .saturating_add(rows[0].width.saturating_sub(2)),
+            rows[0]
+                .y
+                .saturating_add(rows[0].height.saturating_sub(2)),
         ),
         InputTarget::Background => (
             rows[1].x.saturating_add(1),
@@ -324,22 +348,36 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
             rows[1]
                 .x
                 .saturating_add(rows[1].width.saturating_sub(2)),
+            rows[1]
+                .y
+                .saturating_add(rows[1].height.saturating_sub(2)),
         ),
         InputTarget::PreviewText => (
             input_tab_area
                 .x
                 .saturating_add(1)
-                .saturating_add("Current input: ".chars().count() as u16),
-            input_tab_area.y.saturating_add(2),
+                .saturating_add(0),
+            input_tab_area.y.saturating_add(3),
             input_tab_area
                 .x
                 .saturating_add(input_tab_area.width.saturating_sub(2)),
+            input_tab_area
+                .y
+                .saturating_add(input_tab_area.height.saturating_sub(2)),
         ),
         InputTarget::None => return None,
     };
 
-    let x = base_x
-        .saturating_add(app.current_input.chars().count() as u16)
-        .min(max_x);
-    Some((x, base_y))
+    let (x, y) = if app.input_target == InputTarget::PreviewText {
+        let y = base_y
+            .saturating_add(text_line_count.saturating_sub(1))
+            .min(max_y);
+        let x = base_x.saturating_add(last_line_len).min(max_x);
+        (x, y)
+    } else {
+        let x = base_x.saturating_add(last_line_len).min(max_x);
+        (x, base_y)
+    };
+
+    Some((x, y))
 }
