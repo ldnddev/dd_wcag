@@ -5,6 +5,7 @@
 //! input handling, and UI state as per the architecture spec.
 
 use crate::color::Color;
+use crate::theme::Theme;
 use palette::Srgb;
 
 // Enum for active input target
@@ -13,6 +14,7 @@ pub enum InputTarget {
     Foreground,
     Background,
     PreviewText,
+    FontFamily,
     None,
 }
 
@@ -40,15 +42,21 @@ pub struct App {
     pub last_parsed_format: Option<String>,
     pub contrast_ratio: f64,
     pub preview_text: String,
+    pub preview_font_family: String,
     pub font_size_px: u16,
     pub is_bold: bool,
     pub error: Option<String>,
     pub show_keybindings: bool,
     pub active_tab: ActiveTab,
+    pub theme: Theme,
 }
 
 impl App {
     pub fn new() -> Self {
+        Self::with_theme(Theme::default())
+    }
+
+    pub fn with_theme(theme: Theme) -> Self {
         let foreground = Color(Srgb::new(0.0, 0.0, 0.0));
         let background = Color(Srgb::new(1.0, 1.0, 1.0));
 
@@ -65,11 +73,13 @@ impl App {
             last_parsed_format: None,
             contrast_ratio: 21.0, // Default black on white
             preview_text: "The quick brown fox jumps over the lazy dog.".to_string(),
+            preview_font_family: "Roboto".to_string(),
             font_size_px: 12,
             is_bold: false,
             error: None,
             show_keybindings: false,
             active_tab: ActiveTab::Input,
+            theme,
         }
     }
 
@@ -84,6 +94,7 @@ impl App {
             InputTarget::Foreground => self.foreground_input.clone(),
             InputTarget::Background => self.background_input.clone(),
             InputTarget::PreviewText => self.preview_text.clone(),
+            InputTarget::FontFamily => self.preview_font_family.clone(),
             InputTarget::None => String::new(),
         };
         self.cursor_char_idx = self.current_input.chars().count();
@@ -94,7 +105,23 @@ impl App {
             InputTarget::Foreground => self.foreground_input = self.current_input.clone(),
             InputTarget::Background => self.background_input = self.current_input.clone(),
             InputTarget::PreviewText => self.preview_text = self.current_input.clone(),
+            InputTarget::FontFamily => self.preview_font_family = self.current_input.clone(),
             InputTarget::None => {}
+        }
+    }
+
+    pub fn cycle_font_family(&mut self) {
+        const PRESET_FONTS: [&str; 5] = ["Roboto", "Open Sans", "Lato", "Montserrat", "Poppins"];
+        let current = self.preview_font_family.trim();
+        let idx = PRESET_FONTS
+            .iter()
+            .position(|font| font.eq_ignore_ascii_case(current))
+            .unwrap_or(0);
+        let next = PRESET_FONTS[(idx + 1) % PRESET_FONTS.len()];
+        self.preview_font_family = next.to_string();
+        if self.input_target == InputTarget::FontFamily {
+            self.current_input = self.preview_font_family.clone();
+            self.cursor_char_idx = self.current_input.chars().count();
         }
     }
 
@@ -186,6 +213,16 @@ impl App {
             self.clamp_cursor();
             return true;
         }
+        if self.input_target == InputTarget::FontFamily {
+            if self.current_input.trim().is_empty() {
+                self.error = Some("Font family cannot be empty".to_string());
+                return false;
+            }
+            self.preview_font_family = self.current_input.clone();
+            self.error = None;
+            self.clamp_cursor();
+            return true;
+        }
 
         let input = self.current_input.trim();
         let lower = input.to_lowercase();
@@ -242,6 +279,7 @@ impl App {
                         self.background_input = self.current_input.clone();
                     }
                     InputTarget::PreviewText => {}
+                    InputTarget::FontFamily => {}
                     InputTarget::None => {}
                 }
                 self.last_parsed_format = Some(format_label);
@@ -352,6 +390,25 @@ mod tests {
         app.sync_active_input();
         assert!(app.submit_input());
         assert_eq!(app.preview_text, "Custom preview sample");
+    }
+
+    #[test]
+    fn font_family_target_updates_preview_font_family() {
+        let mut app = App::new();
+        app.set_input_target(InputTarget::FontFamily);
+        app.current_input = "Inter".to_string();
+        app.cursor_char_idx = app.current_input.chars().count();
+        app.sync_active_input();
+        assert!(app.submit_input());
+        assert_eq!(app.preview_font_family, "Inter");
+    }
+
+    #[test]
+    fn cycle_font_family_rotates_presets() {
+        let mut app = App::new();
+        app.preview_font_family = "Roboto".to_string();
+        app.cycle_font_family();
+        assert_eq!(app.preview_font_family, "Open Sans");
     }
 
     #[test]

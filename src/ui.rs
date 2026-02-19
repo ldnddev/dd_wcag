@@ -5,7 +5,7 @@
 use crate::app::{ActiveTab, App, InputTarget};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap},
     Frame,
@@ -17,7 +17,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(6),
             Constraint::Min(8),
             Constraint::Length(2),
         ])
@@ -39,15 +39,16 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Block::default()
                     .title("Error (Esc closes)")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red)),
+                    .border_style(Style::default().fg(app.theme.error_color())),
             )
             .alignment(Alignment::Center)
+            .style(Style::default().fg(app.theme.text_color()))
             .wrap(Wrap { trim: true });
         frame.render_widget(error_widget, popup);
     }
 
     if app.show_keybindings {
-        render_keybindings_popup(frame, size);
+        render_keybindings_popup(frame, app, size);
     }
 
     if app.error.is_none() && !app.show_keybindings {
@@ -58,10 +59,20 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
-    let cols = Layout::default()
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .split(area);
+
+    let top_cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+        .split(rows[0]);
+
+    let bottom_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
 
     let fg_active = app.input_target == InputTarget::Foreground;
     let fg_title = if fg_active { "FG (active)" } else { "FG" };
@@ -76,12 +87,12 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
                 .title(fg_title)
                 .borders(Borders::ALL)
                 .border_style(if fg_active {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(app.theme.highlight_color())
                 } else {
-                    Style::default()
+                    Style::default().fg(app.theme.border_color())
                 }),
         ),
-        cols[0],
+        top_cols[0],
     );
 
     let bg_active = app.input_target == InputTarget::Background;
@@ -97,12 +108,62 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
                 .title(bg_title)
                 .borders(Borders::ALL)
                 .border_style(if bg_active {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(app.theme.highlight_color())
                 } else {
-                    Style::default()
+                    Style::default().fg(app.theme.border_color())
                 }),
         ),
-        cols[1],
+        top_cols[1],
+    );
+
+    let preview_active = app.input_target == InputTarget::PreviewText;
+    let preview_title = if preview_active {
+        "PreviewText (active)"
+    } else {
+        "PreviewText"
+    };
+    let preview_text = if preview_active {
+        app.current_input.clone()
+    } else {
+        app.preview_text.replace('\n', "\\n")
+    };
+    frame.render_widget(
+        Paragraph::new(preview_text).block(
+            Block::default()
+                .title(preview_title)
+                .borders(Borders::ALL)
+                .border_style(if preview_active {
+                    Style::default().fg(app.theme.highlight_color())
+                } else {
+                    Style::default().fg(app.theme.border_color())
+                }),
+        ),
+        bottom_cols[0],
+    );
+
+    let font_active = app.input_target == InputTarget::FontFamily;
+    let font_title = if font_active {
+        "FontFamily (active)"
+    } else {
+        "FontFamily"
+    };
+    let font_text = if font_active {
+        app.current_input.clone()
+    } else {
+        app.preview_font_family.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(font_text).block(
+            Block::default()
+                .title(font_title)
+                .borders(Borders::ALL)
+                .border_style(if font_active {
+                    Style::default().fg(app.theme.highlight_color())
+                } else {
+                    Style::default().fg(app.theme.border_color())
+                }),
+        ),
+        bottom_cols[1],
     );
 }
 
@@ -122,8 +183,17 @@ fn render_middle(frame: &mut Frame, app: &App, area: Rect) {
 
     let tabs = Tabs::new(titles)
         .select(selected)
-        .block(Block::default().borders(Borders::ALL).title("Tabs"))
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Tabs")
+                .border_style(Style::default().fg(app.theme.border_color())),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(app.theme.highlight_color())
+                .add_modifier(Modifier::BOLD),
+        );
     frame.render_widget(tabs, chunks[0]);
 
     match app.active_tab {
@@ -139,6 +209,7 @@ fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
         InputTarget::Foreground => "Foreground",
         InputTarget::Background => "Background",
         InputTarget::PreviewText => "Preview Text",
+        InputTarget::FontFamily => "Font Family",
         InputTarget::None => "None",
     };
 
@@ -161,12 +232,22 @@ fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
 
     body.push(Line::from(""));
     body.push(Line::from(format!(
+        "Preview font family: {}",
+        app.preview_font_family
+    )));
+    body.push(Line::from(""));
+    body.push(Line::from(format!(
         "Last parsed format: {}",
         app.last_parsed_format.as_deref().unwrap_or("-")
     )));
 
     frame.render_widget(
-        Paragraph::new(body).block(Block::default().title("Input").borders(Borders::ALL)),
+        Paragraph::new(body).style(Style::default().fg(app.theme.text_color())).block(
+            Block::default()
+                .title("Input")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.border_color())),
+        ),
         area,
     );
 }
@@ -192,7 +273,12 @@ fn render_conversions_tab(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     frame.render_widget(
-        Paragraph::new(lines).block(Block::default().title("Conversions").borders(Borders::ALL)),
+        Paragraph::new(lines).style(Style::default().fg(app.theme.text_color())).block(
+            Block::default()
+                .title("Conversions")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.border_color())),
+        ),
         area,
     );
 }
@@ -216,7 +302,11 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
             )),
             Span::styled(
                 if current_pass { "PASS" } else { "FAIL" },
-                Style::default().fg(if current_pass { Color::Green } else { Color::Red }),
+                Style::default().fg(if current_pass {
+                    app.theme.success_color()
+                } else {
+                    app.theme.error_color()
+                }),
             ),
         ]),
         Line::from(""),
@@ -230,13 +320,22 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(format!("{quick_size:.0}px | {ratio:.2} | ")),
             Span::styled(
                 if quick_pass { "PASS" } else { "FAIL" },
-                Style::default().fg(if quick_pass { Color::Green } else { Color::Red }),
+                Style::default().fg(if quick_pass {
+                    app.theme.success_color()
+                } else {
+                    app.theme.error_color()
+                }),
             ),
         ]));
     }
 
     frame.render_widget(
-        Paragraph::new(lines).block(Block::default().title("Contrast").borders(Borders::ALL)),
+        Paragraph::new(lines).style(Style::default().fg(app.theme.text_color())).block(
+            Block::default()
+                .title("Contrast")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.border_color())),
+        ),
         area,
     );
 }
@@ -256,7 +355,8 @@ fn render_preview_tab(frame: &mut Frame, app: &App, area: Rect) {
             .block(
                 Block::default()
                     .title(format!("Preview ({font_size}px, {weight})"))
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_color())),
             ),
         area,
     );
@@ -268,6 +368,7 @@ fn render_help(frame: &mut Frame, app: &App, area: Rect) {
             InputTarget::Foreground => "Input > FG",
             InputTarget::Background => "Input > BG",
             InputTarget::PreviewText => "Input > PreviewText",
+            InputTarget::FontFamily => "Input > FontFamily",
             InputTarget::None => "Input",
         },
         ActiveTab::Conversions => "Conversions",
@@ -279,7 +380,12 @@ fn render_help(frame: &mut Frame, app: &App, area: Rect) {
         "Focus: {focus} | F1: keybindings"
     ))
     .alignment(Alignment::Center)
-    .block(Block::default().borders(Borders::TOP));
+    .style(Style::default().fg(app.theme.text_color()))
+    .block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(app.theme.border_color())),
+    );
     frame.render_widget(help, area);
 }
 
@@ -303,12 +409,12 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn render_keybindings_popup(frame: &mut Frame, area: Rect) {
+fn render_keybindings_popup(frame: &mut Frame, app: &App, area: Rect) {
     let popup = centered_rect(area, 80, 70);
     frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from("Navigation"),
-        Line::from("Tab / Shift+Tab: cycle focus and auto-apply FG/BG/PreviewText"),
+        Line::from("Tab / Shift+Tab: cycle focus and auto-apply FG/BG/PreviewText/FontFamily"),
         Line::from("Left / Right: move cursor in active input field"),
         Line::from("Enter: insert newline when focus is PreviewText"),
         Line::from("Backspace: delete before cursor in active input field"),
@@ -316,6 +422,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect) {
         Line::from("Actions"),
         Line::from("Ctrl+Up / Ctrl+Down: increase/decrease font size (6..=120)"),
         Line::from("Ctrl+B: toggle bold"),
+        Line::from("Ctrl+F: toggle preset Google font family"),
         Line::from("F1: open keybindings popup"),
         Line::from("Ctrl+O: open web preview (/tmp/dd_wcag_preview.html)"),
         Line::from("Ctrl+Q: quit"),
@@ -323,7 +430,13 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect) {
     ];
 
     let widget = Paragraph::new(lines)
-        .block(Block::default().title("Keybindings").borders(Borders::ALL))
+        .style(Style::default().fg(app.theme.text_color()))
+        .block(
+            Block::default()
+                .title("Keybindings")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.highlight_color())),
+        )
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, popup);
 }
@@ -336,64 +449,75 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(6),
             Constraint::Min(8),
             Constraint::Length(2),
         ])
         .split(size);
 
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
         .split(chunks[0]);
 
-    let middle = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(5)])
-        .split(chunks[1]);
-    let input_tab_area = middle[1];
+    let top_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[0]);
+
+    let bottom_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
 
     let (cursor_row, cursor_col) = app.cursor_line_col();
 
     let (base_x, base_y, max_x, max_y) = match app.input_target {
         InputTarget::Foreground => (
-            cols[0].x.saturating_add(1),
-            cols[0].y.saturating_add(1),
-            cols[0]
+            top_cols[0].x.saturating_add(1),
+            top_cols[0].y.saturating_add(1),
+            top_cols[0]
                 .x
-                .saturating_add(cols[0].width.saturating_sub(2)),
-            cols[0]
+                .saturating_add(top_cols[0].width.saturating_sub(2)),
+            top_cols[0]
                 .y
-                .saturating_add(cols[0].height.saturating_sub(2)),
+                .saturating_add(top_cols[0].height.saturating_sub(2)),
         ),
         InputTarget::Background => (
-            cols[1].x.saturating_add(1),
-            cols[1].y.saturating_add(1),
-            cols[1]
+            top_cols[1].x.saturating_add(1),
+            top_cols[1].y.saturating_add(1),
+            top_cols[1]
                 .x
-                .saturating_add(cols[1].width.saturating_sub(2)),
-            cols[1]
+                .saturating_add(top_cols[1].width.saturating_sub(2)),
+            top_cols[1]
                 .y
-                .saturating_add(cols[1].height.saturating_sub(2)),
+                .saturating_add(top_cols[1].height.saturating_sub(2)),
         ),
         InputTarget::PreviewText => (
-            input_tab_area
+            bottom_cols[0].x.saturating_add(1),
+            bottom_cols[0].y.saturating_add(1),
+            bottom_cols[0]
                 .x
-                .saturating_add(1)
-                .saturating_add(0),
-            input_tab_area.y.saturating_add(3),
-            input_tab_area
-                .x
-                .saturating_add(input_tab_area.width.saturating_sub(2)),
-            input_tab_area
+                .saturating_add(bottom_cols[0].width.saturating_sub(2)),
+            bottom_cols[0]
                 .y
-                .saturating_add(input_tab_area.height.saturating_sub(2)),
+                .saturating_add(bottom_cols[0].height.saturating_sub(2)),
+        ),
+        InputTarget::FontFamily => (
+            bottom_cols[1].x.saturating_add(1),
+            bottom_cols[1].y.saturating_add(1),
+            bottom_cols[1]
+                .x
+                .saturating_add(bottom_cols[1].width.saturating_sub(2)),
+            bottom_cols[1]
+                .y
+                .saturating_add(bottom_cols[1].height.saturating_sub(2)),
         ),
         InputTarget::None => return None,
     };
 
     let (x, y) = if app.input_target == InputTarget::PreviewText {
-        let width = input_tab_area.width.saturating_sub(2).max(1);
+        let width = bottom_cols[0].width.saturating_sub(2).max(1);
         let wrapped_rows = cursor_col / width;
         let wrapped_col = cursor_col % width;
         let y = base_y
