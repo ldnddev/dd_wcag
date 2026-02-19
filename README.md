@@ -14,6 +14,31 @@ Terminal WCAG color utility built with Rust, `ratatui`, and `crossterm`.
 cargo run
 ```
 
+## Build Binary
+```bash
+cargo build --release
+./target/release/dd_wcag
+```
+
+The app loads theme from:
+- `~/.config/ldnddev/dd_wcag/theme.yml`
+
+## Install Script
+Install from current checkout:
+```bash
+./install.sh
+```
+
+Install by cloning a repo:
+```bash
+./install.sh --repo https://github.com/your-org/dd_wcag.git --branch main
+```
+
+The installer:
+- Builds `dd_wcag` in release mode
+- Installs binary to `~/.local/bin/dd_wcag` (default)
+- Installs default theme to `~/.config/ldnddev/dd_wcag/theme.yml` if missing
+
 ## Keybindings
 - `Tab` / `Shift+Tab`: cycle focus and auto-apply FG/BG/PreviewText input
 - `Enter`: insert newline when focus is `PreviewText`

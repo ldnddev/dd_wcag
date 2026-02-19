@@ -11,7 +11,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::env;
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 // Import modules
@@ -24,13 +26,26 @@ mod web_preview;
 use app::{ActiveTab, App, InputTarget};
 use theme::Theme;
 
+fn theme_path() -> Option<PathBuf> {
+    let home = env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("ldnddev")
+            .join("dd_wcag")
+            .join("theme.yml"),
+    )
+}
+
 // Main function
 fn main() -> Result<()> {
     // Setup terminal
     let mut terminal = setup_terminal()?;
 
     // Create app state
-    let loaded_theme = Theme::load_from_file("theme.yml");
+    let loaded_theme = theme_path()
+        .ok_or_else(|| "HOME is not set".to_string())
+        .and_then(Theme::load_from_file);
     let mut app = match loaded_theme {
         Ok(theme) => App::with_theme(theme),
         Err(err) => {
