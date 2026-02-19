@@ -1,0 +1,8 @@
+# Catppuccin Mocha-inspired theme colors.
+# All colors must be 6-digit hex.
+
+border: "#cba6f7"      # surface1
+highlight: "#74c7ec"   # mauve
+success: "#a6e3a1"     # green
+error: "#f38ba8"       # red
+text: "#cdd6f4"        # text

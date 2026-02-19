@@ -17,10 +17,12 @@ use std::time::{Duration, Instant};
 // Import modules
 mod app;
 mod color;
+mod theme;
 mod ui;
 mod web_preview;
 
 use app::{ActiveTab, App, InputTarget};
+use theme::Theme;
 
 // Main function
 fn main() -> Result<()> {
@@ -28,7 +30,15 @@ fn main() -> Result<()> {
     let mut terminal = setup_terminal()?;
 
     // Create app state
-    let mut app = App::new();
+    let loaded_theme = Theme::load_from_file("theme.yml");
+    let mut app = match loaded_theme {
+        Ok(theme) => App::with_theme(theme),
+        Err(err) => {
+            let mut app = App::new();
+            app.error = Some(format!("Theme load warning (using defaults): {err}"));
+            app
+        }
+    };
     sync_web_preview(&mut app);
 
     // Run the main loop
@@ -68,6 +78,11 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 app.is_bold = !app.is_bold;
+                effects.sync_preview = true;
+            }
+
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                app.cycle_font_family();
                 effects.sync_preview = true;
             }
 
@@ -117,6 +132,13 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                         return effects;
                     }
                     effects.sync_preview = true;
+                    app.set_input_target(InputTarget::FontFamily);
+                }
+                InputTarget::FontFamily => {
+                    if !try_apply_active_input(app) {
+                        return effects;
+                    }
+                    effects.sync_preview = true;
                     app.active_tab = ActiveTab::Conversions;
                     app.set_input_target(InputTarget::None);
                 }
@@ -148,6 +170,13 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                     }
                     effects.sync_preview = true;
                     app.set_input_target(InputTarget::Background);
+                }
+                InputTarget::FontFamily => {
+                    if !try_apply_active_input(app) {
+                        return effects;
+                    }
+                    effects.sync_preview = true;
+                    app.set_input_target(InputTarget::PreviewText);
                 }
                 InputTarget::Foreground | InputTarget::None => {
                     if !try_apply_active_input(app) {
@@ -362,6 +391,15 @@ mod tests {
         let mut app = App::new();
         handle_key_event(&mut app, key(KeyCode::F(1), KeyModifiers::NONE));
         assert!(app.show_keybindings);
+    }
+
+    #[test]
+    fn ctrl_f_cycles_font_family() {
+        let mut app = App::new();
+        let start = app.preview_font_family.clone();
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_ne!(app.preview_font_family, start);
+        assert!(effects.sync_preview);
     }
 
     #[test]

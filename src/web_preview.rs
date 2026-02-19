@@ -8,7 +8,17 @@ const PREVIEW_PATH: &str = "/tmp/dd_wcag_preview.html";
 pub fn sync(app: &App) -> io::Result<()> {
     let fg = app.foreground.to_hex();
     let bg = app.background.to_hex();
-    let font_weight = if app.is_bold { "700" } else { "400" };
+    let font_family = app.preview_font_family.trim();
+    let font_query = google_font_family_query(font_family);
+    let google_font_link = if font_query.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family={font_query}&display=swap" rel="stylesheet">"#
+        )
+    };
     let text = escape_html(&app.preview_text);
 
     let html = format!(
@@ -16,9 +26,9 @@ pub fn sync(app: &App) -> io::Result<()> {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="refresh" content="0.4" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>dd_wcag Preview</title>
+  {google_font_link}
   <style>
     :root {{ color-scheme: light dark; }}
     body {{
@@ -52,8 +62,8 @@ pub fn sync(app: &App) -> io::Result<()> {
       padding: 20px 24px;
       background: {bg};
       color: {fg};
+      font-family: '{font_family}', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       font-size: {size}px;
-      font-weight: {weight};
       line-height: 1.35;
       word-break: break-word;
     }}
@@ -63,7 +73,8 @@ pub fn sync(app: &App) -> io::Result<()> {
   <div class="panel">
     <div class="meta">
       <div><strong>Size:</strong> {size}px</div>
-      <div><strong>Weight:</strong> {weight_label}</div>
+      <div><strong>Weight:</strong> {weight_label} (not applied in web preview)</div>
+      <div><strong>Font:</strong> {font_family}</div>
       <div><strong>FG:</strong> {fg}</div>
       <div><strong>BG:</strong> {bg}</div>
     </div>
@@ -74,9 +85,10 @@ pub fn sync(app: &App) -> io::Result<()> {
 "#,
         fg = fg,
         bg = bg,
+        font_family = font_family,
         size = app.font_size_px,
-        weight = font_weight,
         weight_label = if app.is_bold { "bold" } else { "normal" },
+        google_font_link = google_font_link,
         text = text
     );
 
@@ -113,4 +125,15 @@ fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn google_font_family_query(font_family: &str) -> String {
+    font_family
+        .chars()
+        .filter_map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => Some(c),
+            ' ' => Some('+'),
+            _ => None,
+        })
+        .collect::<String>()
 }
