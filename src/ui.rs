@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap},
     Frame,
 };
 
@@ -17,7 +17,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
+            Constraint::Length(3),
             Constraint::Min(8),
             Constraint::Length(2),
         ])
@@ -29,6 +29,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     if let Some(error) = &app.error {
         let popup = centered_rect(size, 50, 20);
+        frame.render_widget(Clear, popup);
         let error_widget = Paragraph::new(vec![
             Line::from(error.as_str()),
             Line::from(""),
@@ -45,7 +46,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         frame.render_widget(error_widget, popup);
     }
 
-    if app.error.is_none() {
+    if app.show_keybindings {
+        render_keybindings_popup(frame, size);
+    }
+
+    if app.error.is_none() && !app.show_keybindings {
         if let Some((x, y)) = input_cursor_position(size, app) {
             frame.set_cursor_position((x, y));
         }
@@ -53,9 +58,9 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3)])
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
     let fg_active = app.input_target == InputTarget::Foreground;
@@ -76,7 +81,7 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default()
                 }),
         ),
-        rows[0],
+        cols[0],
     );
 
     let bg_active = app.input_target == InputTarget::Background;
@@ -97,7 +102,7 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default()
                 }),
         ),
-        rows[1],
+        cols[1],
     );
 }
 
@@ -271,7 +276,7 @@ fn render_help(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let help = Paragraph::new(format!(
-        "Focus: {focus} | Tab/Shift+Tab: cycle+apply FG/BG/PreviewText | Enter: newline (PreviewText) | Left/Right: move cursor | Ctrl+Up/Down: size (+/-1px) | Ctrl+B: bold | Ctrl+O: open web preview (/tmp/dd_wcag_preview.html) | Ctrl+Q/Esc: quit"
+        "Focus: {focus} | F1: keybindings"
     ))
     .alignment(Alignment::Center)
     .block(Block::default().borders(Borders::TOP));
@@ -298,6 +303,31 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn render_keybindings_popup(frame: &mut Frame, area: Rect) {
+    let popup = centered_rect(area, 80, 70);
+    frame.render_widget(Clear, popup);
+    let lines = vec![
+        Line::from("Navigation"),
+        Line::from("Tab / Shift+Tab: cycle focus and auto-apply FG/BG/PreviewText"),
+        Line::from("Left / Right: move cursor in active input field"),
+        Line::from("Enter: insert newline when focus is PreviewText"),
+        Line::from("Backspace: delete before cursor in active input field"),
+        Line::from(""),
+        Line::from("Actions"),
+        Line::from("Ctrl+Up / Ctrl+Down: increase/decrease font size (6..=120)"),
+        Line::from("Ctrl+B: toggle bold"),
+        Line::from("F1: open keybindings popup"),
+        Line::from("Ctrl+O: open web preview (/tmp/dd_wcag_preview.html)"),
+        Line::from("Ctrl+Q: quit"),
+        Line::from("Esc: close this popup (or close error / quit when popup is not open)"),
+    ];
+
+    let widget = Paragraph::new(lines)
+        .block(Block::default().title("Keybindings").borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, popup);
+}
+
 fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
     if app.active_tab != ActiveTab::Input || app.input_target == InputTarget::None {
         return None;
@@ -306,15 +336,15 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
+            Constraint::Length(3),
             Constraint::Min(8),
             Constraint::Length(2),
         ])
         .split(size);
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3)])
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[0]);
 
     let middle = Layout::default()
@@ -327,24 +357,24 @@ fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
 
     let (base_x, base_y, max_x, max_y) = match app.input_target {
         InputTarget::Foreground => (
-            rows[0].x.saturating_add(1),
-            rows[0].y.saturating_add(1),
-            rows[0]
+            cols[0].x.saturating_add(1),
+            cols[0].y.saturating_add(1),
+            cols[0]
                 .x
-                .saturating_add(rows[0].width.saturating_sub(2)),
-            rows[0]
+                .saturating_add(cols[0].width.saturating_sub(2)),
+            cols[0]
                 .y
-                .saturating_add(rows[0].height.saturating_sub(2)),
+                .saturating_add(cols[0].height.saturating_sub(2)),
         ),
         InputTarget::Background => (
-            rows[1].x.saturating_add(1),
-            rows[1].y.saturating_add(1),
-            rows[1]
+            cols[1].x.saturating_add(1),
+            cols[1].y.saturating_add(1),
+            cols[1]
                 .x
-                .saturating_add(rows[1].width.saturating_sub(2)),
-            rows[1]
+                .saturating_add(cols[1].width.saturating_sub(2)),
+            cols[1]
                 .y
-                .saturating_add(rows[1].height.saturating_sub(2)),
+                .saturating_add(cols[1].height.saturating_sub(2)),
         ),
         InputTarget::PreviewText => (
             input_tab_area

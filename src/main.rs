@@ -171,11 +171,17 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         },
 
         KeyCode::Esc => {
-            if app.error.is_some() {
+            if app.show_keybindings {
+                app.show_keybindings = false;
+            } else if app.error.is_some() {
                 app.error = None;
             } else {
                 effects.quit = true;
             }
+        }
+
+        KeyCode::F(1) => {
+            app.show_keybindings = true;
         }
 
         KeyCode::Char(c) => {
@@ -349,6 +355,13 @@ mod tests {
 
         let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(quit.quit);
+    }
+
+    #[test]
+    fn f1_opens_keybindings_popup() {
+        let mut app = App::new();
+        handle_key_event(&mut app, key(KeyCode::F(1), KeyModifiers::NONE));
+        assert!(app.show_keybindings);
     }
 
     #[test]
