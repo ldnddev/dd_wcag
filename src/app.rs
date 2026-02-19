@@ -43,6 +43,7 @@ pub struct App {
     pub font_size_px: u16,
     pub is_bold: bool,
     pub error: Option<String>,
+    pub show_keybindings: bool,
     pub active_tab: ActiveTab,
 }
 
@@ -67,6 +68,7 @@ impl App {
             font_size_px: 12,
             is_bold: false,
             error: None,
+            show_keybindings: false,
             active_tab: ActiveTab::Input,
         }
     }
