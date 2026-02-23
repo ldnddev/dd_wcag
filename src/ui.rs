@@ -295,7 +295,7 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let lc = app.foreground.apca_lc(&app.background);
-    let apca_pass = app.foreground.apca_passes(&app.background, app.font_size_px, app.is_bold);
+    let apca_pass = app.foreground.apca_passes(&app.background, app.font_size_px.into(), app.is_bold);
     let apca_threshold = if size <= 12.0 {
         if app.is_bold { 75.0 } else { 90.0 }
     } else if size <= 18.0 {

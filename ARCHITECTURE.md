@@ -23,6 +23,7 @@ dd_wcag is a terminal-based WCAG color contrast utility built with Rust, Ratatui
 ## New Features
 
 - **APCA Integration**: Added to color.rs with Lc calculation and size/weight-based thresholds. Displayed alongside WCAG in Contrast tab and web preview.
+- **Palette Tab**: New tab for managing a list of brand colors and testing contrast against FG/BG. Logic in app.rs for palette storage/add/remove; rendering in ui.rs with contrast results; keybindings for navigation/adding colors.
 
 ## Definition of Done (Phase 1+)
 
