@@ -6,8 +6,9 @@ Terminal WCAG color utility built with Rust, `ratatui`, and `crossterm`.
 - Foreground/background color input in `HEX`, `RGB/RGBA`, and `HSL`
 - Live conversion panel (`hex`, `rgb`, `hsl`)
 - WCAG AA contrast evaluation for current size/weight
+- APCA (Advanced Perceptual Contrast Algorithm) evaluation alongside WCAG
 - TUI preview with color + bold styling
-- Browser preview with real CSS pixel font size
+- Browser preview with real CSS pixel font size (now includes WCAG and APCA info)
 
 ## Run
 ```bash
@@ -65,10 +66,16 @@ The installer:
 - Font size and weight:
   - In Contrast/Preview tabs, use `Ctrl+Up/Down` and verify size changes.
   - Toggle `Ctrl+B` and verify bold state changes.
+- Contrast checks:
+  - Switch to Contrast tab and verify WCAG ratio, pass/fail, and quick reference table.
+  - Verify APCA Lc value, pass/fail, and quick reference table update with color/size/bold changes.
+  - Test high/low contrast cases to see differences between WCAG and APCA.
 - Web preview sync:
   - Press `Ctrl+O` to open `/tmp/dd_wcag_preview.html`.
   - Confirm FG/BG/PreviewText/size/bold changes reflect in browser preview.
+  - Verify WCAG and APCA info is displayed in the meta section.
 
 ## Notes
 - Terminal rendering cannot change real per-widget font size.
 - For true font-size rendering, use the browser preview opened by `Ctrl+O`.
+- APCA provides more accurate contrast for modern displays, often stricter than WCAG for small text.

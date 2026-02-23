@@ -294,8 +294,20 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
         "4.5"
     };
 
+    let lc = app.foreground.apca_lc(&app.background);
+    let apca_pass = app.foreground.apca_passes(&app.background, app.font_size_px.into(), app.is_bold);
+    let apca_threshold = if size <= 12.0 {
+        if app.is_bold { 75.0 } else { 90.0 }
+    } else if size <= 18.0 {
+        if app.is_bold { 60.0 } else { 75.0 }
+    } else if size <= 24.0 {
+        if app.is_bold { 45.0 } else { 60.0 }
+    } else {
+        if app.is_bold { 30.0 } else { 45.0 }
+    };
+
     let mut lines = vec![
-        Line::from("Current Result"),
+        Line::from("WCAG Current Result"),
         Line::from(vec![
             Span::raw(format!(
                 "{size:.0}px {weight} | ratio {ratio:.2} | needs >= {current_threshold} | "
@@ -310,7 +322,22 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
             ),
         ]),
         Line::from(""),
-        Line::from(format!("Quick Reference ({weight})")),
+        Line::from("APCA Current Result"),
+        Line::from(vec![
+            Span::raw(format!(
+                "{size:.0}px {weight} | Lc {lc:.2} | needs >= {apca_threshold:.0} | "
+            )),
+            Span::styled(
+                if apca_pass { "PASS" } else { "FAIL" },
+                Style::default().fg(if apca_pass {
+                    app.theme.success_color()
+                } else {
+                    app.theme.error_color()
+                }),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(format!("WCAG Quick Reference ({weight})")),
         Line::from("Size | Ratio | Result"),
     ];
 
@@ -321,6 +348,25 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 if quick_pass { "PASS" } else { "FAIL" },
                 Style::default().fg(if quick_pass {
+                    app.theme.success_color()
+                } else {
+                    app.theme.error_color()
+                }),
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(format!("APCA Quick Reference ({weight})")));
+    lines.push(Line::from("Size | Lc | Result"));
+
+    for quick_size in [12, 14, 16, 18, 24] {
+        let quick_apca_pass = app.foreground.apca_passes(&app.background, quick_size, app.is_bold);
+        lines.push(Line::from(vec![
+            Span::raw(format!("{quick_size}px | {lc:.2} | ")),
+            Span::styled(
+                if quick_apca_pass { "PASS" } else { "FAIL" },
+                Style::default().fg(if quick_apca_pass {
                     app.theme.success_color()
                 } else {
                     app.theme.error_color()
