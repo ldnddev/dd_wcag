@@ -661,6 +661,7 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw("Up/Down"),
         ]);
     }
+    let show_scrollbar = max_scroll > 0;
 
     frame.render_widget(
         Paragraph::new(visible_lines)
@@ -682,6 +683,10 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
             .wrap(Wrap { trim: true }),
         area,
     );
+
+    if show_scrollbar {
+        render_vertical_scrollbar(frame, app, area, scroll, max_scroll);
+    }
 }
 
 fn render_help(frame: &mut Frame, app: &App, area: Rect) {
@@ -787,6 +792,55 @@ fn render_toast(frame: &mut Frame, app: &App, area: Rect) {
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, toast);
+}
+
+fn render_vertical_scrollbar(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    scroll: usize,
+    max_scroll: usize,
+) {
+    if area.height <= 2 || area.width <= 2 {
+        return;
+    }
+
+    let track_height = area.height.saturating_sub(2);
+    let x = area.x.saturating_add(area.width.saturating_sub(2));
+    for offset in 0..track_height {
+        frame.render_widget(
+            Paragraph::new("│").style(
+                Style::default()
+                    .fg(app.theme.text_secondary_color())
+                    .bg(app.theme.body_background_color()),
+            ),
+            Rect {
+                x,
+                y: area.y.saturating_add(1).saturating_add(offset),
+                width: 1,
+                height: 1,
+            },
+        );
+    }
+
+    let thumb_y_offset = if max_scroll == 0 {
+        0
+    } else {
+        ((scroll as u32 * track_height.saturating_sub(1) as u32) / max_scroll as u32) as u16
+    };
+    frame.render_widget(
+        Paragraph::new("█").style(
+            Style::default()
+                .fg(app.theme.scrollbar_color())
+                .bg(app.theme.body_background_color()),
+        ),
+        Rect {
+            x,
+            y: area.y.saturating_add(1).saturating_add(thumb_y_offset),
+            width: 1,
+            height: 1,
+        },
+    );
 }
 
 fn render_keybindings_popup(frame: &mut Frame, app: &App, area: Rect) {

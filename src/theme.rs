@@ -365,6 +365,10 @@ impl Theme {
         color_or_reset(&self.border_active)
     }
 
+    pub fn scrollbar_color(&self) -> Color {
+        color_or_reset(&self.scrollbar)
+    }
+
     pub fn input_border_default_color(&self) -> Color {
         color_or_reset(&self.input_border_default)
     }
