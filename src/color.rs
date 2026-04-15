@@ -18,11 +18,7 @@ impl Color {
         }
 
         let (r_str, g_str, b_str): (String, String, String) = if len == 3 {
-            (
-                s[0..1].repeat(2),
-                s[1..2].repeat(2),
-                s[2..3].repeat(2),
-            )
+            (s[0..1].repeat(2), s[1..2].repeat(2), s[2..3].repeat(2))
         } else {
             (
                 s[0..2].to_string(),
@@ -129,11 +125,12 @@ impl Color {
         let fg_y = self.luminance();
         let bg_y = other.luminance();
 
-        let (txt_y, bg_y) = if fg_y < bg_y { (bg_y, fg_y) } else { (fg_y, bg_y) };
+        let (txt_y, bg_y) = if fg_y < bg_y {
+            (bg_y, fg_y)
+        } else {
+            (fg_y, bg_y)
+        };
 
-        if txt_y <= 0.0 || bg_y <= 0.0 {
-            return 0.0;
-        }
         if txt_y == bg_y {
             return 0.0;
         }
@@ -189,10 +186,34 @@ impl Color {
     pub fn apca_passes(&self, other: &Color, font_size_px: u32, is_bold: bool) -> bool {
         let lc = self.apca_lc(other).abs();
         let threshold = match font_size_px {
-            0..=12 => if is_bold { 75.0 } else { 90.0 },
-            13..=18 => if is_bold { 60.0 } else { 75.0 },
-            19..=24 => if is_bold { 45.0 } else { 60.0 },
-            _ => if is_bold { 30.0 } else { 45.0 }, // For larger text
+            0..=12 => {
+                if is_bold {
+                    75.0
+                } else {
+                    90.0
+                }
+            }
+            13..=18 => {
+                if is_bold {
+                    60.0
+                } else {
+                    75.0
+                }
+            }
+            19..=24 => {
+                if is_bold {
+                    45.0
+                } else {
+                    60.0
+                }
+            }
+            _ => {
+                if is_bold {
+                    30.0
+                } else {
+                    45.0
+                }
+            } // For larger text
         };
         lc >= threshold
     }

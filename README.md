@@ -9,6 +9,8 @@ Terminal WCAG color utility built with Rust, `ratatui`, and `crossterm`.
 - APCA (Advanced Perceptual Contrast Algorithm) evaluation alongside WCAG
 - TUI preview with color + bold styling
 - Browser preview with real CSS pixel font size (now includes WCAG and APCA info)
+- Palette theme builder for Primary/Secondary/Tertiary brand colors with WCAG-gated `_palette.scss` output, scrollable generated output, and visible scrollbar
+- Bottom-right toast notifications that auto-close after 5 seconds
 
 ## Run
 ```bash
@@ -39,10 +41,16 @@ Install by cloning a repo:
 ./install.sh --repo https://github.com/your-org/dd_wcag.git --branch main
 ```
 
+Uninstall:
+```bash
+./install.sh -uninstall
+```
+
 The installer:
 - Builds `dd_wcag` in release mode
 - Installs binary to `~/.local/bin/dd_wcag` (default)
 - Installs default theme to `~/.config/ldnddev/dd_wcag_theme.yml` if missing
+- Uninstall removes the installed binary and `dd_wcag_theme.yml`, then removes `~/.config/ldnddev` only if it is empty
 
 ## Keybindings
 - `Tab` / `Shift+Tab`: cycle focus and auto-apply FG/BG/PreviewText input
@@ -50,11 +58,29 @@ The installer:
 - `Left` / `Right`: move cursor in active input field
 - `Ctrl+Up` / `Ctrl+Down`: increase/decrease font size (`6..=120`)
 - `Ctrl+B`: toggle bold
+- `G`: generate palette when focused on the Palette tab
+- `Up` / `Down`: select Palette inputs before generation, scroll generated output after generation
+- `F` then `G`: apply selected Palette color to foreground preview
+- `B` then `G`: apply selected Palette color to background preview
+- `Ctrl+S`: save generated palette to `./_palette.scss`
+- `Ctrl+C`: copy generated palette values to the system clipboard when available
 - `F1`: open keybindings popup
 - `F2`: open theme debug popup
 - `Ctrl+O`: open web preview (`/tmp/dd_wcag_preview.html`)
-- `Esc`: dismiss error popup (or quit when no popup)
+- `Esc`: cancel active Palette edit/apply flow or quit
 - `Ctrl+Q`: quit
+
+Non-interactive status and error messages appear as bottom-right toasts and close automatically after 5 seconds.
+
+## Palette Builder
+- Required base colors: `Primary`, `Secondary`, and `Tertiary`
+- Optional base color: `Support`
+- Text colors are fixed and are not changed by palette generation
+- Press `G` to generate the palette and WCAG compliance checks
+- Generated variables and compliance checks appear in a scrollable detail panel
+- A visible scrollbar appears when the generated detail panel has overflow content
+- `Ctrl+S` writes the generated palette to `./_palette.scss`
+- `Ctrl+C` copies the generated palette values when a system clipboard command is available
 
 ## Manual Test Checklist
 - Valid color parse and conversion updates:
@@ -62,7 +88,7 @@ The installer:
   - Verify Conversions tab updates correctly after tabbing out.
 - Invalid color handling:
   - Enter invalid `HEX` (e.g. `#12zz34`) and confirm error says HEX.
-  - Press `Esc` and confirm popup closes without quitting.
+  - Confirm the error appears as a bottom-right toast and auto-closes.
 - Focus/apply flow:
   - Cycle `FG -> BG -> PreviewText` using `Tab`, and reverse with `Shift+Tab`.
   - Confirm FG/BG drafts persist independently.
@@ -80,6 +106,15 @@ The installer:
   - Press `Ctrl+O` to open `/tmp/dd_wcag_preview.html`.
   - Confirm FG/BG/PreviewText/size/bold changes reflect in browser preview.
   - Verify WCAG and APCA info is displayed in the meta section.
+- Palette builder:
+  - Tab to `Palette`, edit Primary/Secondary/Tertiary/Support with `Enter`.
+  - Press `G` and confirm the generated summary has no blocking failures.
+  - Confirm generated variables and compliance checks can be scrolled with `Up` / `Down`.
+  - Confirm the scrollbar appears when the generated panel overflows.
+  - Press `F` then `G` and confirm the selected color becomes the foreground.
+  - Press `B` then `G` and confirm the selected color becomes the background.
+  - Press `Ctrl+S` and confirm `_palette.scss` is written.
+  - Press `Ctrl+C` and confirm the generated SCSS is copied when a clipboard command is available.
 
 ## Notes
 - Terminal rendering cannot change real per-widget font size.

@@ -5,8 +5,14 @@
 //! input handling, and UI state as per the architecture spec.
 
 use crate::color::Color;
+use crate::palette::{
+    generate_palette, parse_palette_color, validate_export, PaletteApplyTarget, PaletteState,
+};
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
+use std::time::{Duration, Instant};
+
+pub const TOAST_TTL: Duration = Duration::from_secs(5);
 
 // Enum for active input target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +31,7 @@ pub enum ActiveTab {
     Conversions,
     Contrast,
     Preview,
+    Palette,
 }
 
 // Main application state (updated with all spec fields)
@@ -47,11 +54,14 @@ pub struct App {
     pub is_bold: bool,
     pub error: Option<String>,
     pub status: Option<String>,
+    pub notification_updated_at: Option<Instant>,
     pub show_keybindings: bool,
     pub show_theme_debug: bool,
     pub active_tab: ActiveTab,
     pub theme: Theme,
     pub theme_source: ThemeSource,
+    pub palette: PaletteState,
+    pub copied_palette: Option<String>,
 }
 
 impl App {
@@ -82,11 +92,14 @@ impl App {
             is_bold: false,
             error: None,
             status: None,
+            notification_updated_at: None,
             show_keybindings: false,
             show_theme_debug: false,
             active_tab: ActiveTab::Input,
             theme,
             theme_source,
+            palette: PaletteState::default(),
+            copied_palette: None,
         }
     }
 
@@ -220,16 +233,18 @@ impl App {
         if self.input_target == InputTarget::PreviewText {
             self.preview_text = self.current_input.clone();
             self.error = None;
+            self.notification_updated_at = None;
             self.clamp_cursor();
             return true;
         }
         if self.input_target == InputTarget::FontFamily {
             if self.current_input.trim().is_empty() {
-                self.error = Some("Font family cannot be empty".to_string());
+                self.notify_error("Font family cannot be empty");
                 return false;
             }
             self.preview_font_family = self.current_input.clone();
             self.error = None;
+            self.notification_updated_at = None;
             self.clamp_cursor();
             return true;
         }
@@ -294,16 +309,114 @@ impl App {
                 }
                 self.last_parsed_format = Some(format_label);
                 self.error = None;
+                self.notification_updated_at = None;
                 self.update_contrast();
                 self.clamp_cursor();
                 true
             }
             Err(err) => {
-                self.error = Some(err);
+                self.notify_error(err);
                 self.last_parsed_format = None;
                 self.clamp_cursor();
                 false
             }
+        }
+    }
+
+    pub fn generate_palette(&mut self) -> bool {
+        match generate_palette(&self.palette) {
+            Ok(generated) => {
+                let blocking_count = generated.blocking_failures().len();
+                let advisory_count = generated.advisory_failures().len();
+                self.palette.generated = Some(generated);
+                self.palette.detail_scroll = 0;
+                self.error = None;
+                self.notify_status(format!(
+                    "Palette generated: {blocking_count} blocking failure(s), {advisory_count} advisory warning(s)."
+                ));
+                blocking_count == 0
+            }
+            Err(err) => {
+                self.notify_error(err);
+                false
+            }
+        }
+    }
+
+    pub fn prepare_palette_export(&self, action: &str) -> Result<String, String> {
+        validate_export(self.palette.generated.as_ref(), action)
+    }
+
+    pub fn apply_selected_palette_color(&mut self, target: PaletteApplyTarget) -> bool {
+        let selected = self.palette.selected();
+        let input = self.palette.selected_input().to_string();
+        match parse_palette_color(&input) {
+            Ok(color) => {
+                let hex = color.to_hex();
+                match target {
+                    PaletteApplyTarget::Foreground => {
+                        self.foreground = color;
+                        self.parsed_fg = Some(color);
+                        self.foreground_input = hex.clone();
+                        if self.input_target == InputTarget::Foreground {
+                            self.current_input = hex.clone();
+                            self.cursor_char_idx = self.current_input.chars().count();
+                        }
+                    }
+                    PaletteApplyTarget::Background => {
+                        self.background = color;
+                        self.parsed_bg = Some(color);
+                        self.background_input = hex.clone();
+                        if self.input_target == InputTarget::Background {
+                            self.current_input = hex.clone();
+                            self.cursor_char_idx = self.current_input.chars().count();
+                        }
+                    }
+                }
+                self.palette.pending_apply = None;
+                self.last_parsed_format = Some("HEX".to_string());
+                self.update_contrast();
+                self.error = None;
+                self.notify_status(format!(
+                    "{} {} applied to {}.",
+                    selected.label(),
+                    hex,
+                    target.label()
+                ));
+                true
+            }
+            Err(err) => {
+                self.palette.pending_apply = None;
+                self.notify_error(format!("{} color error: {err}", selected.label()));
+                false
+            }
+        }
+    }
+
+    pub fn notify_status(&mut self, message: impl Into<String>) {
+        self.status = Some(message.into());
+        self.error = None;
+        self.notification_updated_at = Some(Instant::now());
+    }
+
+    pub fn notify_error(&mut self, message: impl Into<String>) {
+        self.error = Some(message.into());
+        self.status = None;
+        self.notification_updated_at = Some(Instant::now());
+    }
+
+    pub fn clear_notification(&mut self) {
+        self.error = None;
+        self.status = None;
+        self.notification_updated_at = None;
+    }
+
+    pub fn expire_notification(&mut self, now: Instant) {
+        if self
+            .notification_updated_at
+            .is_some_and(|updated_at| now.duration_since(updated_at) >= TOAST_TTL)
+        {
+            self.clear_notification();
         }
     }
 }
@@ -311,6 +424,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn adjust_font_size_clamps_to_bounds() {
@@ -435,5 +549,42 @@ mod tests {
         app.backspace_at_cursor();
         assert_eq!(app.current_input, "ab");
         assert_eq!(app.cursor_char_idx, 1);
+    }
+
+    #[test]
+    fn generate_palette_creates_exportable_scss() {
+        let mut app = App::new();
+
+        assert!(app.generate_palette());
+        let scss = app
+            .prepare_palette_export("saving")
+            .expect("generated palette exports");
+
+        assert!(scss.contains("$c_primary_default"));
+        assert!(app.error.is_none());
+    }
+
+    #[test]
+    fn invalid_palette_base_color_sets_error() {
+        let mut app = App::new();
+        app.palette.primary_input = "bad-color".to_string();
+
+        assert!(!app.generate_palette());
+        assert!(app.error.as_deref().unwrap_or("").contains("Primary"));
+    }
+
+    #[test]
+    fn notifications_expire_after_toast_ttl() {
+        let mut app = App::new();
+        let now = Instant::now();
+        app.notify_status("Saved");
+        app.notification_updated_at = Some(now);
+
+        app.expire_notification(now + Duration::from_secs(4));
+        assert!(app.status.is_some());
+
+        app.expire_notification(now + TOAST_TTL);
+        assert!(app.status.is_none());
+        assert!(app.error.is_none());
     }
 }
