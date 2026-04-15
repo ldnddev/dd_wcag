@@ -17,11 +17,15 @@ use std::time::{Duration, Instant};
 // Import modules
 mod app;
 mod color;
+mod palette;
 mod theme;
 mod ui;
 mod web_preview;
 
 use app::{ActiveTab, App, InputTarget};
+use palette::{PaletteApplyTarget, PALETTE_EXPORT_PATH};
+use std::io::Write;
+use std::process::{Command, Stdio};
 use theme::Theme;
 
 // Main function
@@ -38,13 +42,13 @@ fn main() -> Result<()> {
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "built-in defaults".to_string());
-    app.status = Some(format!(
-        "Theme health: {} theme v{} active ({path_label}). Press Esc to dismiss.",
+    app.notify_status(format!(
+        "Theme health: {} theme v{} active ({path_label}).",
         source.label(),
         app.theme.version
     ));
     if let Some(warning) = loaded_theme.warning {
-        app.error = Some(warning);
+        app.notify_error(warning);
     }
     sync_web_preview(&mut app);
 
@@ -59,7 +63,7 @@ fn main() -> Result<()> {
 
 fn sync_web_preview(app: &mut App) {
     if let Err(err) = web_preview::sync(app) {
-        app.error = Some(format!("Failed to update web preview: {err}"));
+        app.notify_error(format!("Failed to update web preview: {err}"));
     }
 }
 
@@ -68,6 +72,8 @@ struct KeyEffects {
     quit: bool,
     sync_preview: bool,
     open_preview: bool,
+    save_palette: bool,
+    copy_palette: bool,
 }
 
 fn try_apply_active_input(app: &mut App) -> bool {
@@ -95,6 +101,18 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
             KeyCode::Char('o') | KeyCode::Char('O') => {
                 effects.open_preview = true;
+            }
+
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                if app.active_tab == ActiveTab::Palette {
+                    effects.save_palette = true;
+                }
+            }
+
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if app.active_tab == ActiveTab::Palette {
+                    effects.copy_palette = true;
+                }
             }
 
             KeyCode::Up => {
@@ -157,6 +175,9 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 app.active_tab = ActiveTab::Preview;
             }
             ActiveTab::Preview => {
+                app.active_tab = ActiveTab::Palette;
+            }
+            ActiveTab::Palette => {
                 app.active_tab = ActiveTab::Input;
                 app.set_input_target(InputTarget::Foreground);
             }
@@ -190,7 +211,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                         return effects;
                     }
                     effects.sync_preview = true;
-                    app.active_tab = ActiveTab::Preview;
+                    app.active_tab = ActiveTab::Palette;
                     app.set_input_target(InputTarget::None);
                 }
             },
@@ -204,6 +225,9 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             ActiveTab::Preview => {
                 app.active_tab = ActiveTab::Contrast;
             }
+            ActiveTab::Palette => {
+                app.active_tab = ActiveTab::Preview;
+            }
         },
 
         KeyCode::Esc => {
@@ -211,12 +235,33 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 app.show_keybindings = false;
             } else if app.show_theme_debug {
                 app.show_theme_debug = false;
-            } else if app.error.is_some() {
-                app.error = None;
-            } else if app.status.is_some() {
-                app.status = None;
+            } else if app.active_tab == ActiveTab::Palette && app.palette.editing {
+                app.palette.cancel_edit();
+            } else if app.active_tab == ActiveTab::Palette && app.palette.pending_apply.is_some() {
+                app.palette.pending_apply = None;
+                app.notify_status("Palette apply cancelled.");
             } else {
                 effects.quit = true;
+            }
+        }
+
+        KeyCode::Up => {
+            if app.active_tab == ActiveTab::Palette && !app.palette.editing {
+                if app.palette.generated.is_some() {
+                    app.palette.scroll_detail_up();
+                } else {
+                    app.palette.select_previous();
+                }
+            }
+        }
+
+        KeyCode::Down => {
+            if app.active_tab == ActiveTab::Palette && !app.palette.editing {
+                if app.palette.generated.is_some() {
+                    app.palette.scroll_detail_down();
+                } else {
+                    app.palette.select_next();
+                }
             }
         }
 
@@ -231,7 +276,25 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         }
 
         KeyCode::Char(c) => {
-            if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+            if app.active_tab == ActiveTab::Palette {
+                if app.palette.editing {
+                    app.palette.insert_char_at_cursor(c);
+                } else if c == 'g' || c == 'G' {
+                    if let Some(target) = app.palette.pending_apply {
+                        if app.apply_selected_palette_color(target) {
+                            effects.sync_preview = true;
+                        }
+                    } else {
+                        app.generate_palette();
+                    }
+                } else if c == 'f' || c == 'F' {
+                    app.palette.pending_apply = Some(PaletteApplyTarget::Foreground);
+                    app.notify_status("Press G to apply selected palette color to FG.");
+                } else if c == 'b' || c == 'B' {
+                    app.palette.pending_apply = Some(PaletteApplyTarget::Background);
+                    app.notify_status("Press G to apply selected palette color to BG.");
+                }
+            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                 app.insert_char_at_cursor(c);
                 app.sync_active_input();
                 if app.input_target == InputTarget::PreviewText {
@@ -241,7 +304,9 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         }
 
         KeyCode::Backspace => {
-            if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+            if app.active_tab == ActiveTab::Palette && app.palette.editing {
+                app.palette.backspace_at_cursor();
+            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                 app.backspace_at_cursor();
                 app.sync_active_input();
                 if app.input_target == InputTarget::PreviewText {
@@ -251,7 +316,15 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         }
 
         KeyCode::Enter => {
-            if app.active_tab == ActiveTab::Input && app.input_target == InputTarget::PreviewText {
+            if app.active_tab == ActiveTab::Palette {
+                if app.palette.editing {
+                    app.palette.commit_edit();
+                } else {
+                    app.palette.begin_edit();
+                }
+            } else if app.active_tab == ActiveTab::Input
+                && app.input_target == InputTarget::PreviewText
+            {
                 app.insert_newline_at_cursor();
                 app.sync_active_input();
                 effects.sync_preview = true;
@@ -259,13 +332,17 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         }
 
         KeyCode::Left => {
-            if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+            if app.active_tab == ActiveTab::Palette && app.palette.editing {
+                app.palette.move_cursor_left();
+            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                 app.move_cursor_left();
             }
         }
 
         KeyCode::Right => {
-            if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+            if app.active_tab == ActiveTab::Palette && app.palette.editing {
+                app.palette.move_cursor_right();
+            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
                 app.move_cursor_right();
             }
         }
@@ -311,11 +388,19 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
 
                 if effects.open_preview {
                     if let Err(err) = web_preview::open_in_browser() {
-                        app.error = Some(format!(
+                        app.notify_error(format!(
                             "Failed to open browser preview ({}): {err}",
                             web_preview::preview_path().display()
                         ));
                     }
+                }
+
+                if effects.save_palette {
+                    save_palette(app);
+                }
+
+                if effects.copy_palette {
+                    copy_palette(app);
                 }
 
                 if effects.sync_preview {
@@ -330,7 +415,103 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
 
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
+            app.expire_notification(last_tick);
         }
+    }
+}
+
+fn save_palette(app: &mut App) {
+    match app.prepare_palette_export("saving") {
+        Ok(scss) => match std::fs::write(PALETTE_EXPORT_PATH, scss) {
+            Ok(()) => {
+                app.notify_status(format!("Palette saved to ./{PALETTE_EXPORT_PATH}."));
+            }
+            Err(err) => {
+                app.notify_error(format!("Failed to save {PALETTE_EXPORT_PATH}: {err}"));
+            }
+        },
+        Err(err) => {
+            app.notify_error(err);
+        }
+    }
+}
+
+fn copy_palette(app: &mut App) {
+    match app.prepare_palette_export("copying") {
+        Ok(scss) => match copy_to_clipboard(&scss) {
+            Ok(()) => {
+                app.copied_palette = Some(scss);
+                app.notify_status("Palette copied to clipboard.");
+            }
+            Err(err) => {
+                app.copied_palette = Some(scss);
+                app.notify_error(format!(
+                    "Could not access a system clipboard command: {err}. Palette is available in the app copy buffer."
+                ));
+            }
+        },
+        Err(err) => {
+            app.notify_error(err);
+        }
+    }
+}
+
+fn copy_to_clipboard(content: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        return write_to_command_stdin("pbcopy", &[], content);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return write_to_command_stdin("clip", &[], content);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let attempts: [(&str, &[&str]); 4] = [
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+            ("termux-clipboard-set", &[]),
+        ];
+        let mut last_err = None;
+        for (program, args) in attempts {
+            match write_to_command_stdin(program, args, content) {
+                Ok(()) => return Ok(()),
+                Err(err) => last_err = Some(err),
+            }
+        }
+        return Err(last_err.unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no clipboard command configured",
+            )
+        }));
+    }
+
+    #[allow(unreachable_code)]
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "clipboard copy is not supported on this platform",
+    ))
+}
+
+fn write_to_command_stdin(program: &str, args: &[&str], content: &str) -> std::io::Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(content.as_bytes())?;
+    }
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "{program} exited with {status}"
+        )))
     }
 }
 
@@ -393,28 +574,22 @@ mod tests {
     }
 
     #[test]
-    fn esc_dismisses_error_before_quit() {
+    fn esc_quits_when_error_toast_is_visible() {
         let mut app = App::new();
-        app.error = Some("error".to_string());
-
-        let dismiss = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(app.error.is_none());
-        assert!(!dismiss.quit);
+        app.notify_error("error");
 
         let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.error.is_some());
         assert!(quit.quit);
     }
 
     #[test]
-    fn esc_dismisses_status_before_quit() {
+    fn esc_quits_when_status_toast_is_visible() {
         let mut app = App::new();
-        app.status = Some("status".to_string());
-
-        let dismiss = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(app.status.is_none());
-        assert!(!dismiss.quit);
+        app.notify_status("status");
 
         let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.status.is_some());
         assert!(quit.quit);
     }
 
@@ -473,5 +648,107 @@ mod tests {
 
         handle_key_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(app.cursor_char_idx, 3);
+    }
+
+    #[test]
+    fn tab_cycle_includes_palette_tab() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Preview;
+
+        handle_key_event(&mut app, key(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(app.active_tab, ActiveTab::Palette);
+    }
+
+    #[test]
+    fn backtab_from_foreground_moves_to_palette_tab() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Input;
+        app.set_input_target(InputTarget::Foreground);
+
+        handle_key_event(&mut app, key(KeyCode::BackTab, KeyModifiers::SHIFT));
+
+        assert_eq!(app.active_tab, ActiveTab::Palette);
+        assert_eq!(app.input_target, InputTarget::None);
+    }
+
+    #[test]
+    fn palette_enter_edits_and_commits_selected_color() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Palette;
+
+        handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.palette.editing);
+
+        app.palette.edit_input = "#000000".to_string();
+        app.palette.edit_cursor_char_idx = app.palette.edit_input.chars().count();
+        handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(!app.palette.editing);
+        assert_eq!(app.palette.primary_input, "#000000");
+    }
+
+    #[test]
+    fn palette_g_generates_scss() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Palette;
+
+        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
+
+        assert!(app.palette.generated.is_some());
+        assert!(app.error.is_none());
+    }
+
+    #[test]
+    fn palette_fg_sequence_applies_selected_color_to_foreground() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Palette;
+        app.palette.primary_input = "#123456".to_string();
+
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::NONE));
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
+
+        assert_eq!(app.foreground.to_hex(), "#123456");
+        assert_eq!(app.foreground_input, "#123456");
+        assert!(effects.sync_preview);
+    }
+
+    #[test]
+    fn palette_bg_sequence_applies_selected_color_to_background() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Palette;
+        app.palette.primary_input = "#abcdef".to_string();
+
+        handle_key_event(&mut app, key(KeyCode::Char('b'), KeyModifiers::NONE));
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
+
+        assert_eq!(app.background.to_hex(), "#abcdef");
+        assert_eq!(app.background_input, "#abcdef");
+        assert!(effects.sync_preview);
+    }
+
+    #[test]
+    fn palette_up_down_scroll_generated_detail() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Palette;
+        app.generate_palette();
+
+        handle_key_event(&mut app, key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.palette.detail_scroll, 1);
+
+        handle_key_event(&mut app, key(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.palette.detail_scroll, 0);
+    }
+
+    #[test]
+    fn ctrl_s_and_ctrl_c_set_palette_effects() {
+        let mut app = App::new();
+        app.active_tab = ActiveTab::Palette;
+
+        let save = handle_key_event(&mut app, key(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let copy = handle_key_event(&mut app, key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+        assert!(save.save_palette);
+        assert!(copy.copy_palette);
     }
 }
