@@ -5,7 +5,7 @@
 //! input handling, and UI state as per the architecture spec.
 
 use crate::color::Color;
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
 
 // Enum for active input target
@@ -46,17 +46,21 @@ pub struct App {
     pub font_size_px: u16,
     pub is_bold: bool,
     pub error: Option<String>,
+    pub status: Option<String>,
     pub show_keybindings: bool,
+    pub show_theme_debug: bool,
     pub active_tab: ActiveTab,
     pub theme: Theme,
+    pub theme_source: ThemeSource,
 }
 
 impl App {
+    #[cfg(test)]
     pub fn new() -> Self {
-        Self::with_theme(Theme::default())
+        Self::with_theme(Theme::default(), ThemeSource::Default)
     }
 
-    pub fn with_theme(theme: Theme) -> Self {
+    pub fn with_theme(theme: Theme, theme_source: ThemeSource) -> Self {
         let foreground = Color(Srgb::new(0.0, 0.0, 0.0));
         let background = Color(Srgb::new(1.0, 1.0, 1.0));
 
@@ -65,7 +69,7 @@ impl App {
             background, // Default white
             foreground_input: foreground.to_hex(),
             background_input: background.to_hex(),
-            input_target: InputTarget::Foreground,       // Start with FG active
+            input_target: InputTarget::Foreground, // Start with FG active
             current_input: foreground.to_hex(),
             cursor_char_idx: foreground.to_hex().chars().count(),
             parsed_fg: None,
@@ -77,9 +81,12 @@ impl App {
             font_size_px: 12,
             is_bold: false,
             error: None,
+            status: None,
             show_keybindings: false,
+            show_theme_debug: false,
             active_tab: ActiveTab::Input,
             theme,
+            theme_source,
         }
     }
 
@@ -133,7 +140,10 @@ impl App {
     }
 
     fn byte_index_at_char(s: &str, char_idx: usize) -> usize {
-        s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
+        s.char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len())
     }
 
     pub fn move_cursor_left(&mut self) {

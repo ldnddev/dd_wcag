@@ -21,8 +21,12 @@ cargo build --release
 ./target/release/dd_wcag
 ```
 
-The app loads theme from:
-- `~/.config/ldnddev/dd_wcag/theme.yml`
+The app loads theme files in this order:
+- `./dd_wcag_theme.yml`
+- `~/.config/ldnddev/dd_wcag_theme.yml`
+- Built-in defaults
+
+Theme files must include `version: 1`; unsupported or missing versions fall back to built-in defaults with a warning.
 
 ## Install Script
 Install from current checkout:
@@ -38,7 +42,7 @@ Install by cloning a repo:
 The installer:
 - Builds `dd_wcag` in release mode
 - Installs binary to `~/.local/bin/dd_wcag` (default)
-- Installs default theme to `~/.config/ldnddev/dd_wcag/theme.yml` if missing
+- Installs default theme to `~/.config/ldnddev/dd_wcag_theme.yml` if missing
 
 ## Keybindings
 - `Tab` / `Shift+Tab`: cycle focus and auto-apply FG/BG/PreviewText input
@@ -46,6 +50,8 @@ The installer:
 - `Left` / `Right`: move cursor in active input field
 - `Ctrl+Up` / `Ctrl+Down`: increase/decrease font size (`6..=120`)
 - `Ctrl+B`: toggle bold
+- `F1`: open keybindings popup
+- `F2`: open theme debug popup
 - `Ctrl+O`: open web preview (`/tmp/dd_wcag_preview.html`)
 - `Esc`: dismiss error popup (or quit when no popup)
 - `Ctrl+Q`: quit

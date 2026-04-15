@@ -4,7 +4,8 @@ set -euo pipefail
 REPO_URL=""
 BRANCH=""
 PREFIX="${HOME}/.local/bin"
-CONFIG_DIR="${HOME}/.config/ldnddev/dd_wcag"
+CONFIG_DIR="${HOME}/.config/ldnddev"
+THEME_FILE="dd_wcag_theme.yml"
 
 usage() {
   cat <<'USAGE'
@@ -82,16 +83,16 @@ mkdir -p "${PREFIX}"
 install -m 0755 "${SRC_DIR}/target/release/dd_wcag" "${PREFIX}/dd_wcag"
 
 mkdir -p "${CONFIG_DIR}"
-if [[ ! -f "${CONFIG_DIR}/theme.yml" ]]; then
-  install -m 0644 "${SRC_DIR}/theme.yml" "${CONFIG_DIR}/theme.yml"
-  echo "Installed default theme to ${CONFIG_DIR}/theme.yml"
+if [[ ! -f "${CONFIG_DIR}/${THEME_FILE}" ]]; then
+  install -m 0644 "${SRC_DIR}/${THEME_FILE}" "${CONFIG_DIR}/${THEME_FILE}"
+  echo "Installed default theme to ${CONFIG_DIR}/${THEME_FILE}"
 else
-  echo "Theme file already exists at ${CONFIG_DIR}/theme.yml (left unchanged)."
+  echo "Theme file already exists at ${CONFIG_DIR}/${THEME_FILE} (left unchanged)."
 fi
 
 echo ""
 echo "Installed: ${PREFIX}/dd_wcag"
-echo "Theme path: ${CONFIG_DIR}/theme.yml"
+echo "Theme path: ${CONFIG_DIR}/${THEME_FILE}"
 echo ""
 echo "Ensure ${PREFIX} is in PATH, then run:"
 echo "  dd_wcag"

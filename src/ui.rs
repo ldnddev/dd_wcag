@@ -13,6 +13,10 @@ use ratatui::{
 
 pub fn render(frame: &mut Frame, app: &App) {
     let size = frame.area();
+    frame.render_widget(
+        Block::default().style(Style::default().bg(app.theme.base_background_color())),
+        size,
+    );
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -35,23 +39,41 @@ pub fn render(frame: &mut Frame, app: &App) {
             Line::from(""),
             Line::from("Press Esc to dismiss."),
         ])
-            .block(
-                Block::default()
-                    .title("Error (Esc closes)")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.error_color())),
-            )
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(app.theme.text_color()))
-            .wrap(Wrap { trim: true });
+        .block(
+            Block::default()
+                .title(Line::styled(
+                    "Error (Esc closes)",
+                    Style::default().fg(app.theme.modal_labels_color()),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.error_color())),
+        )
+        .alignment(Alignment::Center)
+        .style(
+            Style::default()
+                .fg(app.theme.modal_text_color())
+                .bg(app.theme.modal_background_color()),
+        )
+        .wrap(Wrap { trim: true });
         frame.render_widget(error_widget, popup);
+    }
+
+    if app.error.is_none() && !app.show_keybindings && !app.show_theme_debug {
+        if let Some(status) = &app.status {
+            render_status_popup(frame, app, size, status);
+        }
     }
 
     if app.show_keybindings {
         render_keybindings_popup(frame, app, size);
     }
 
-    if app.error.is_none() && !app.show_keybindings {
+    if app.show_theme_debug {
+        render_theme_debug_popup(frame, app, size);
+    }
+
+    if app.error.is_none() && app.status.is_none() && !app.show_keybindings && !app.show_theme_debug
+    {
         if let Some((x, y)) = input_cursor_position(size, app) {
             frame.set_cursor_position((x, y));
         }
@@ -81,19 +103,7 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         app.foreground_input.clone()
     };
-    frame.render_widget(
-        Paragraph::new(fg_text).block(
-            Block::default()
-                .title(fg_title)
-                .borders(Borders::ALL)
-                .border_style(if fg_active {
-                    Style::default().fg(app.theme.highlight_color())
-                } else {
-                    Style::default().fg(app.theme.border_color())
-                }),
-        ),
-        top_cols[0],
-    );
+    render_input_field(frame, app, top_cols[0], fg_title, fg_text, fg_active);
 
     let bg_active = app.input_target == InputTarget::Background;
     let bg_title = if bg_active { "BG (active)" } else { "BG" };
@@ -102,19 +112,7 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         app.background_input.clone()
     };
-    frame.render_widget(
-        Paragraph::new(bg_text).block(
-            Block::default()
-                .title(bg_title)
-                .borders(Borders::ALL)
-                .border_style(if bg_active {
-                    Style::default().fg(app.theme.highlight_color())
-                } else {
-                    Style::default().fg(app.theme.border_color())
-                }),
-        ),
-        top_cols[1],
-    );
+    render_input_field(frame, app, top_cols[1], bg_title, bg_text, bg_active);
 
     let preview_active = app.input_target == InputTarget::PreviewText;
     let preview_title = if preview_active {
@@ -127,18 +125,13 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         app.preview_text.replace('\n', "\\n")
     };
-    frame.render_widget(
-        Paragraph::new(preview_text).block(
-            Block::default()
-                .title(preview_title)
-                .borders(Borders::ALL)
-                .border_style(if preview_active {
-                    Style::default().fg(app.theme.highlight_color())
-                } else {
-                    Style::default().fg(app.theme.border_color())
-                }),
-        ),
+    render_input_field(
+        frame,
+        app,
         bottom_cols[0],
+        preview_title,
+        preview_text,
+        preview_active,
     );
 
     let font_active = app.input_target == InputTarget::FontFamily;
@@ -152,18 +145,53 @@ fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         app.preview_font_family.clone()
     };
-    frame.render_widget(
-        Paragraph::new(font_text).block(
-            Block::default()
-                .title(font_title)
-                .borders(Borders::ALL)
-                .border_style(if font_active {
-                    Style::default().fg(app.theme.highlight_color())
-                } else {
-                    Style::default().fg(app.theme.border_color())
-                }),
-        ),
+    render_input_field(
+        frame,
+        app,
         bottom_cols[1],
+        font_title,
+        font_text,
+        font_active,
+    );
+}
+
+fn render_input_field(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    title: &str,
+    text: String,
+    active: bool,
+) {
+    let title_style = if active {
+        Style::default().fg(app.theme.text_active_focus_color())
+    } else {
+        Style::default().fg(app.theme.text_labels_color())
+    };
+    let border_style = if active {
+        Style::default().fg(app.theme.input_border_focus_color())
+    } else {
+        Style::default().fg(app.theme.input_border_default_color())
+    };
+    let input_style = if active {
+        Style::default()
+            .fg(app.theme.input_text_focus_color())
+            .bg(app.theme.body_background_color())
+    } else {
+        Style::default()
+            .fg(app.theme.input_text_default_color())
+            .bg(app.theme.body_background_color())
+    };
+
+    frame.render_widget(
+        Paragraph::new(text).style(input_style).block(
+            Block::default()
+                .title(Line::styled(title.to_string(), title_style))
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .style(Style::default().bg(app.theme.body_background_color())),
+        ),
+        area,
     );
 }
 
@@ -186,12 +214,17 @@ fn render_middle(frame: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Tabs")
-                .border_style(Style::default().fg(app.theme.border_color())),
+                .title(Line::styled(
+                    "Tabs",
+                    Style::default().fg(app.theme.text_labels_color()),
+                ))
+                .border_style(Style::default().fg(app.theme.border_default_color()))
+                .style(Style::default().bg(app.theme.body_background_color())),
         )
         .highlight_style(
             Style::default()
-                .fg(app.theme.highlight_color())
+                .fg(app.theme.text_active_focus_color())
+                .bg(app.theme.selected_background_color())
                 .add_modifier(Modifier::BOLD),
         );
     frame.render_widget(tabs, chunks[0]);
@@ -242,12 +275,22 @@ fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
     )));
 
     frame.render_widget(
-        Paragraph::new(body).style(Style::default().fg(app.theme.text_color())).block(
-            Block::default()
-                .title("Input")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.border_color())),
-        ),
+        Paragraph::new(body)
+            .style(
+                Style::default()
+                    .fg(app.theme.text_primary_color())
+                    .bg(app.theme.body_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title(Line::styled(
+                        "Input",
+                        Style::default().fg(app.theme.text_labels_color()),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_default_color()))
+                    .style(Style::default().bg(app.theme.body_background_color())),
+            ),
         area,
     );
 }
@@ -273,12 +316,22 @@ fn render_conversions_tab(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(app.theme.text_color())).block(
-            Block::default()
-                .title("Conversions")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.border_color())),
-        ),
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.text_primary_color())
+                    .bg(app.theme.body_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title(Line::styled(
+                        "Conversions",
+                        Style::default().fg(app.theme.text_labels_color()),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_default_color()))
+                    .style(Style::default().bg(app.theme.body_background_color())),
+            ),
         area,
     );
 }
@@ -295,15 +348,33 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let lc = app.foreground.apca_lc(&app.background);
-    let apca_pass = app.foreground.apca_passes(&app.background, app.font_size_px.into(), app.is_bold);
+    let apca_pass =
+        app.foreground
+            .apca_passes(&app.background, app.font_size_px.into(), app.is_bold);
     let apca_threshold = if size <= 12.0 {
-        if app.is_bold { 75.0 } else { 90.0 }
+        if app.is_bold {
+            75.0
+        } else {
+            90.0
+        }
     } else if size <= 18.0 {
-        if app.is_bold { 60.0 } else { 75.0 }
+        if app.is_bold {
+            60.0
+        } else {
+            75.0
+        }
     } else if size <= 24.0 {
-        if app.is_bold { 45.0 } else { 60.0 }
+        if app.is_bold {
+            45.0
+        } else {
+            60.0
+        }
     } else {
-        if app.is_bold { 30.0 } else { 45.0 }
+        if app.is_bold {
+            30.0
+        } else {
+            45.0
+        }
     };
 
     let mut lines = vec![
@@ -361,7 +432,9 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from("Size | Lc | Result"));
 
     for quick_size in [12, 14, 16, 18, 24] {
-        let quick_apca_pass = app.foreground.apca_passes(&app.background, quick_size, app.is_bold);
+        let quick_apca_pass = app
+            .foreground
+            .apca_passes(&app.background, quick_size, app.is_bold);
         lines.push(Line::from(vec![
             Span::raw(format!("{quick_size}px | {lc:.2} | ")),
             Span::styled(
@@ -376,12 +449,22 @@ fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(app.theme.text_color())).block(
-            Block::default()
-                .title("Contrast")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.border_color())),
-        ),
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.text_primary_color())
+                    .bg(app.theme.body_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title(Line::styled(
+                        "Contrast",
+                        Style::default().fg(app.theme.text_labels_color()),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_default_color()))
+                    .style(Style::default().bg(app.theme.body_background_color())),
+            ),
         area,
     );
 }
@@ -402,7 +485,7 @@ fn render_preview_tab(frame: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .title(format!("Preview ({font_size}px, {weight})"))
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_color())),
+                    .border_style(Style::default().fg(app.theme.border_default_color())),
             ),
         area,
     );
@@ -423,14 +506,20 @@ fn render_help(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let help = Paragraph::new(format!(
-        "Focus: {focus} | F1: keybindings"
+        "Focus: {focus} | Theme: {} | F1: keybindings | F2: theme",
+        app.theme_source.label()
     ))
     .alignment(Alignment::Center)
-    .style(Style::default().fg(app.theme.text_color()))
+    .style(
+        Style::default()
+            .fg(app.theme.text_secondary_color())
+            .bg(app.theme.base_background_color()),
+    )
     .block(
         Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(app.theme.border_color())),
+            .border_style(Style::default().fg(app.theme.border_default_color()))
+            .style(Style::default().bg(app.theme.base_background_color())),
     );
     frame.render_widget(help, area);
 }
@@ -455,6 +544,35 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn render_status_popup(frame: &mut Frame, app: &App, area: Rect, status: &str) {
+    let popup = centered_rect(area, 58, 18);
+    frame.render_widget(Clear, popup);
+
+    let widget = Paragraph::new(vec![
+        Line::from(status),
+        Line::from(""),
+        Line::from("Press Esc to dismiss."),
+    ])
+    .style(
+        Style::default()
+            .fg(app.theme.modal_text_color())
+            .bg(app.theme.modal_background_color()),
+    )
+    .alignment(Alignment::Center)
+    .block(
+        Block::default()
+            .title(Line::styled(
+                "Theme Health",
+                Style::default().fg(app.theme.modal_labels_color()),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.info_color()))
+            .style(Style::default().bg(app.theme.modal_background_color())),
+    )
+    .wrap(Wrap { trim: true });
+    frame.render_widget(widget, popup);
+}
+
 fn render_keybindings_popup(frame: &mut Frame, app: &App, area: Rect) {
     let popup = centered_rect(area, 80, 70);
     frame.render_widget(Clear, popup);
@@ -470,21 +588,105 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, area: Rect) {
         Line::from("Ctrl+B: toggle bold"),
         Line::from("Ctrl+F: toggle preset Google font family"),
         Line::from("F1: open keybindings popup"),
+        Line::from("F2: open theme debug popup"),
         Line::from("Ctrl+O: open web preview (/tmp/dd_wcag_preview.html)"),
         Line::from("Ctrl+Q: quit"),
         Line::from("Esc: close this popup (or close error / quit when popup is not open)"),
     ];
 
     let widget = Paragraph::new(lines)
-        .style(Style::default().fg(app.theme.text_color()))
+        .style(
+            Style::default()
+                .fg(app.theme.modal_text_color())
+                .bg(app.theme.modal_background_color()),
+        )
         .block(
             Block::default()
-                .title("Keybindings")
+                .title(Line::styled(
+                    "Keybindings",
+                    Style::default().fg(app.theme.modal_labels_color()),
+                ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.highlight_color())),
+                .border_style(Style::default().fg(app.theme.border_active_color()))
+                .style(Style::default().bg(app.theme.modal_background_color())),
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, popup);
+}
+
+fn render_theme_debug_popup(frame: &mut Frame, app: &App, area: Rect) {
+    let popup = centered_rect(area, 72, 82);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "Source:  ",
+                Style::default().fg(app.theme.modal_labels_color()),
+            ),
+            Span::styled(
+                app.theme_source.label(),
+                Style::default().fg(app.theme.modal_text_color()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Version: ",
+                Style::default().fg(app.theme.modal_labels_color()),
+            ),
+            Span::styled(
+                app.theme.version.to_string(),
+                Style::default().fg(app.theme.modal_text_color()),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    for (key, value) in app.theme.tokens() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{key:<22}"),
+                Style::default().fg(app.theme.modal_labels_color()),
+            ),
+            Span::styled(value.to_string(), Style::default().fg(theme_color(value))),
+        ]));
+    }
+
+    let widget = Paragraph::new(lines)
+        .style(
+            Style::default()
+                .fg(app.theme.modal_text_color())
+                .bg(app.theme.modal_background_color()),
+        )
+        .block(
+            Block::default()
+                .title(Line::styled(
+                    "Theme",
+                    Style::default().fg(app.theme.modal_labels_color()),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.border_active_color()))
+                .style(Style::default().bg(app.theme.modal_background_color())),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, popup);
+}
+
+fn theme_color(input: &str) -> ratatui::style::Color {
+    let s = input.trim().strip_prefix('#').unwrap_or(input.trim());
+    if s.len() != 6 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return ratatui::style::Color::Reset;
+    }
+    let Some(r) = u8::from_str_radix(&s[0..2], 16).ok() else {
+        return ratatui::style::Color::Reset;
+    };
+    let Some(g) = u8::from_str_radix(&s[2..4], 16).ok() else {
+        return ratatui::style::Color::Reset;
+    };
+    let Some(b) = u8::from_str_radix(&s[4..6], 16).ok() else {
+        return ratatui::style::Color::Reset;
+    };
+    ratatui::style::Color::Rgb(r, g, b)
 }
 
 fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {

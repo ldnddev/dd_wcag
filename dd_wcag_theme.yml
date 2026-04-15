@@ -1,0 +1,35 @@
+version: 1
+
+colors:
+  base_background: "#0F1114"
+  body_background: "#2A2D31"
+  modal_background: "#1C1E21"
+
+  text_primary: "#F5F6F7"
+  text_secondary: "#9EA3AA"
+  text_labels: "#FFAF46"
+  text_active_focus: "#64B4F5"
+  modal_labels: "#64B4F5"
+  modal_text: "#F5F6F7"
+
+  selected_background: "#0F1114"
+
+  border_default: "#F5F6F7"
+  border_active: "#64B4F5"
+  scrollbar: "#FFA087"
+  scrollbar_hover: "#64B4F5"
+
+  input_border_default: "#F5F6F7"
+  input_border_focus: "#64B4F5"
+  input_text_default: "#F5F6F7"
+  input_text_focus: "#64B4F5"
+  cursor: "#64B4F5"
+
+  success: "#82e0aa"
+  warning: "#f5c469"
+  error: "#e57373"
+  info: "#5dade2"
+
+  folders: "#64B4F5"
+  files: "#FFAF46"
+  links: "#FFA087"

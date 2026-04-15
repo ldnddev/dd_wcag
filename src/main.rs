@@ -11,9 +11,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::env;
 use std::io::{self, Stdout};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 // Import modules
@@ -26,34 +24,28 @@ mod web_preview;
 use app::{ActiveTab, App, InputTarget};
 use theme::Theme;
 
-fn theme_path() -> Option<PathBuf> {
-    let home = env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".config")
-            .join("ldnddev")
-            .join("dd_wcag")
-            .join("theme.yml"),
-    )
-}
-
 // Main function
 fn main() -> Result<()> {
     // Setup terminal
     let mut terminal = setup_terminal()?;
 
     // Create app state
-    let loaded_theme = theme_path()
-        .ok_or_else(|| "HOME is not set".to_string())
-        .and_then(Theme::load_from_file);
-    let mut app = match loaded_theme {
-        Ok(theme) => App::with_theme(theme),
-        Err(err) => {
-            let mut app = App::new();
-            app.error = Some(format!("Theme load warning (using defaults): {err}"));
-            app
-        }
-    };
+    let loaded_theme = Theme::load();
+    let source = loaded_theme.source;
+    let path = loaded_theme.path.clone();
+    let mut app = App::with_theme(loaded_theme.theme, source);
+    let path_label = path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "built-in defaults".to_string());
+    app.status = Some(format!(
+        "Theme health: {} theme v{} active ({path_label}). Press Esc to dismiss.",
+        source.label(),
+        app.theme.version
+    ));
+    if let Some(warning) = loaded_theme.warning {
+        app.error = Some(warning);
+    }
     sync_web_preview(&mut app);
 
     // Run the main loop
@@ -217,8 +209,12 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         KeyCode::Esc => {
             if app.show_keybindings {
                 app.show_keybindings = false;
+            } else if app.show_theme_debug {
+                app.show_theme_debug = false;
             } else if app.error.is_some() {
                 app.error = None;
+            } else if app.status.is_some() {
+                app.status = None;
             } else {
                 effects.quit = true;
             }
@@ -226,6 +222,12 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
         KeyCode::F(1) => {
             app.show_keybindings = true;
+            app.show_theme_debug = false;
+        }
+
+        KeyCode::F(2) => {
+            app.show_theme_debug = true;
+            app.show_keybindings = false;
         }
 
         KeyCode::Char(c) => {
@@ -300,7 +302,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
     loop {
         terminal.draw(|f| ui::render(f, app))?;
 
-        let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or(Duration::ZERO);
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or(Duration::ZERO);
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 let effects = handle_key_event(app, key);
@@ -402,10 +406,30 @@ mod tests {
     }
 
     #[test]
+    fn esc_dismisses_status_before_quit() {
+        let mut app = App::new();
+        app.status = Some("status".to_string());
+
+        let dismiss = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.status.is_none());
+        assert!(!dismiss.quit);
+
+        let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(quit.quit);
+    }
+
+    #[test]
     fn f1_opens_keybindings_popup() {
         let mut app = App::new();
         handle_key_event(&mut app, key(KeyCode::F(1), KeyModifiers::NONE));
         assert!(app.show_keybindings);
+    }
+
+    #[test]
+    fn f2_opens_theme_debug_popup() {
+        let mut app = App::new();
+        handle_key_event(&mut app, key(KeyCode::F(2), KeyModifiers::NONE));
+        assert!(app.show_theme_debug);
     }
 
     #[test]
