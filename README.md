@@ -120,3 +120,55 @@ Non-interactive status and error messages appear as bottom-right toasts and clos
 - Terminal rendering cannot change real per-widget font size.
 - For true font-size rendering, use the browser preview opened by `Ctrl+O`.
 - APCA provides more accurate contrast for modern displays, often stricter than WCAG for small text.
+
+## Architecture
+
+### Tech stack
+- `ratatui` for TUI rendering
+- `crossterm` for keyboard input and terminal control
+- `palette` for color conversion/math
+- `anyhow` for error handling
+
+### Module layout (`src/`)
+- `main.rs` — terminal lifecycle, event loop, pure `handle_key_event` returning a `KeyEffects` struct, side-effect dispatch (browser open, palette save, clipboard, web-preview sync).
+- `app.rs` — central `App` state: input-target switching, draft syncing, format-aware parse/apply, cursor-aware text editing (insert/backspace/move), font-size clamped adjustment (`6..=120`), preview font-family preset cycling, toast notifications with 5-second TTL.
+- `color.rs` — parsing (`parse_hex`, `parse_rgb` incl. `rgba`, `parse_hsl`), formatting (`to_hex`, `to_rgb_str`, `to_hsl_str`), WCAG luminance and contrast math.
+- `palette.rs` — Palette tab state, brand/action/support token derivation in light + dark, WCAG compliance gating, `_palette.scss` generation.
+- `theme.rs` — YAML theme loading with version validation and the local → global → default fallback chain.
+- `ui.rs` — ratatui layout/rendering for the five tabs, keybindings popup (`F1`), theme debug popup (`F2`), bottom-right toasts, cursor placement for active inputs.
+- `web_preview.rs` — writes `/tmp/dd_wcag_preview.html` with real CSS `font-size` and opens it in the default browser.
+
+### Runtime state (`App`)
+- Colors: `foreground`, `background`, per-field drafts `foreground_input` / `background_input`, `last_parsed_format` (`HEX | RGB | RGBA | HSL | None`).
+- Navigation: `input_target` (`Foreground | Background | PreviewText | FontFamily | None`), `active_tab` (`Input | Conversions | Contrast | Preview | Palette`).
+- Text editing: `current_input` buffer, `cursor_char_idx`.
+- Contrast/preview: `contrast_ratio`, `preview_text`, `preview_font_family`, `font_size_px` (default `12`, clamped `6..=120`), `is_bold`.
+- Feedback: `error`, `status`, `notification_updated_at` (5s TTL).
+- Popups: `show_keybindings`, `show_theme_debug`.
+- Theming: `theme`, `theme_source` (`Local | Global | Default`).
+- Palette: `palette` (`PaletteState`), `copied_palette`.
+
+### Key-handler pattern
+`handle_key_event(&mut App, KeyEvent) -> KeyEffects` is pure of I/O. It mutates `App` and returns a `KeyEffects` struct with intent flags (`quit`, `sync_preview`, `open_preview`, `save_palette`, `copy_palette`). The real side effects are performed by `run_loop` based on those flags. This split keeps key handling unit-testable.
+
+### Input parsing rules
+- Accepted: `#rgb` / `#rrggbb` (or without `#`); `rgb(r,g,b)` or `r,g,b`; `rgba(r,g,b,a)` (alpha validated, RGB used); `hsl(h,s,l)` (percent signs accepted on `s`/`l`).
+- Errors are format-aware (`Invalid HEX format: ...`, `Invalid RGB format: ...`, etc.) with a fallback supported-format guidance message.
+
+### Contrast logic
+- WCAG ratio: `(Llighter + 0.05) / (Ldarker + 0.05)`.
+- AA thresholds: normal text `>= 4.5`; large text `>= 3.0`. Large text means `>= 18px` normal or `>= 14px` bold.
+- The Contrast tab shows the verdict for the active size/weight plus a quick-reference table for `12 / 14 / 16 / 18` at the current weight, alongside APCA Lc.
+
+### Preview strategy
+TUI preview shows accurate colors, weight, and size metadata, but terminal widgets cannot render true per-widget pixel font size. The browser preview at `/tmp/dd_wcag_preview.html` (`Ctrl+O`) is the only path that renders real CSS `font-size`.
+
+### Test coverage
+Tests live in `#[cfg(test)] mod tests` blocks alongside the code:
+- `color.rs` — parsing, formatting, luminance, contrast, style conversion.
+- `app.rs` — font-size clamping, FG/BG submit behavior, invalid input labeling, draft persistence, preview-text updates, cursor edit helpers.
+- `main.rs` — Tab auto-apply success/failure, `Ctrl+Up/Down` direction + bounds, `Esc` dismiss-before-quit, `Enter` newline insertion, cursor movement via key events.
+- `palette.rs` — palette generation, compliance checks, export validation.
+- `theme.rs` — YAML parsing, version validation, fallback behavior.
+
+CI (`.github/workflows/ci.yml`) runs `cargo check --locked` and `cargo test --locked` on stable Rust.

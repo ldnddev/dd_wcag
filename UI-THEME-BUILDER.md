@@ -8,7 +8,7 @@ The Palette tab must let the user provide brand base colors, generate the derive
 
 - Accept user-provided `Primary`, `Secondary`, and `Tertiary` brand colors.
 - Keep text colors fixed; the theme builder must not modify text role values.
-- Generate light and dark mode palette variables that match the `PALETTE.md` structure.
+- Generate light and dark mode palette variables that match the structure defined below.
 - Test every generated color where it can be used as a text/background/border/surface value.
 - Make failures visible before export.
 - Provide copy-ready `_palette.scss` output.
@@ -74,7 +74,7 @@ Rules:
 
 ## Generated Variable Groups
 
-The output must follow the variable naming and grouping used by `PALETTE.md`.
+The output must follow the variable naming and grouping defined below.
 
 ### Primary Colors
 
@@ -159,9 +159,9 @@ $c_support_focus
 $c_support_focus--dark
 ```
 
-### Existing PALETTE.md Groups
+### Additional Token Groups
 
-The generated `_palette.scss` must also preserve or include:
+The generated `_palette.scss` must also include the following groups, which are not derived from user inputs and use built-in defaults:
 
 - Semantic status variables: success, warning, error, info
 - Fixed text role variables
@@ -261,7 +261,9 @@ The right panel should be able to show:
 
 ## Palette Keybindings
 
-- `Up` / `Down`: move through `Primary`, `Secondary`, `Tertiary`, and `Support`.
+- `Up` / `Down`:
+  - Before a palette has been generated: move through `Primary`, `Secondary`, `Tertiary`, and `Support`.
+  - After generation: scroll the generated detail panel.
 - `Enter`: edit the selected base color.
 - `G`: generate or regenerate the palette from the current base colors.
 - `F` then `G`: push the actively selected palette color to the app foreground input for preview.
@@ -269,6 +271,8 @@ The right panel should be able to show:
 - `Ctrl+S`: save/export `_palette.scss`.
 - `Ctrl+C`: copy the generated `_palette.scss` values so the user can paste them elsewhere.
 - `Esc`: cancel edit mode or a pending preview apply sequence.
+
+The detail panel must show a visible scrollbar when its content overflows.
 
 Non-interactive status and error messages must render as bottom-right toasts and close automatically after 5 seconds.
 
@@ -304,7 +308,7 @@ Output requirements:
 
 - Use the exact variable names listed above.
 - Use `rgba(r, g, b, 1)` values.
-- Preserve `PALETTE.md` group order:
+- Preserve this group order:
   - Primary
   - Secondary
   - Tertiary
