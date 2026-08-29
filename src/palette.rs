@@ -60,6 +60,7 @@ pub struct PaletteState {
     pub edit_cursor_char_idx: usize,
     pub pending_apply: Option<PaletteApplyTarget>,
     pub detail_scroll: usize,
+    pub detail_max_scroll: usize,
     pub generated: Option<GeneratedPalette>,
 }
 
@@ -76,6 +77,7 @@ impl Default for PaletteState {
             edit_cursor_char_idx: 0,
             pending_apply: None,
             detail_scroll: 0,
+            detail_max_scroll: 0,
             generated: None,
         }
     }
@@ -178,11 +180,22 @@ impl PaletteState {
     }
 
     pub fn scroll_detail_up(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_sub(1);
+        self.scroll_detail_by(-1);
     }
 
     pub fn scroll_detail_down(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_add(1);
+        self.scroll_detail_by(1);
+    }
+
+    pub fn scroll_detail_by(&mut self, delta: i32) {
+        if delta < 0 {
+            self.detail_scroll = self.detail_scroll.saturating_sub(delta.unsigned_abs() as usize);
+        } else {
+            self.detail_scroll = self
+                .detail_scroll
+                .saturating_add(delta as usize)
+                .min(self.detail_max_scroll);
+        }
     }
 
     fn clamp_cursor(&mut self) {
@@ -420,31 +433,37 @@ fn push_action_tokens(tokens: &mut Vec<PaletteToken>, family: &str, base: Color)
 }
 
 fn push_support_tokens(tokens: &mut Vec<PaletteToken>, base: Color) {
-    push_token(tokens, "$c_support_overlay", adjust_lightness(base, 0.92));
+    push_token(
+        tokens,
+        "$c_support_overlay",
+        Color::parse_hex("#000000").expect("overlay"),
+    );
     push_token(
         tokens,
         "$c_support_overlay--dark",
-        adjust_lightness(base, 0.16),
+        Color::parse_hex("#000000").expect("overlay"),
     );
     push_token(
         tokens,
         "$c_support_border",
-        ensure_non_text_contrast(base, neutral_100()),
+        Color::parse_hex("#E0E3E7").expect("support border"),
     );
     push_token(
         tokens,
         "$c_support_border--dark",
-        ensure_non_text_contrast(adjust_lightness(base, 0.70), neutral_100_dark()),
+        Color::parse_hex("#2A2D31").expect("support border dark"),
     );
-    push_token(
-        tokens,
-        "$c_support_focus",
-        ensure_non_text_contrast(adjust_lightness(base, 0.36), neutral_100()),
-    );
+    push_token(tokens, "$c_support_focus", base);
     push_token(
         tokens,
         "$c_support_focus--dark",
-        ensure_non_text_contrast(adjust_lightness(base, 0.78), neutral_100_dark()),
+        adjust_lightness(base, 0.72),
+    );
+    push_token(tokens, "$c_support_disabled", fixed_text_disabled());
+    push_token(
+        tokens,
+        "$c_support_disabled--dark",
+        fixed_text_disabled_dark(),
     );
 }
 
@@ -600,7 +619,7 @@ fn build_checks(tokens: &[PaletteToken]) -> Vec<ComplianceCheck> {
                 ratio,
                 threshold: 3.0,
                 passes: ratio >= 3.0,
-                blocking: true,
+                blocking: false,
             });
         }
     }
@@ -608,51 +627,225 @@ fn build_checks(tokens: &[PaletteToken]) -> Vec<ComplianceCheck> {
     checks
 }
 
-fn render_scss(tokens: &[PaletteToken]) -> String {
-    let mut out = String::new();
-    let mut current_group = "";
-    for token in tokens {
-        let group = group_for_token(&token.name);
-        if group != current_group {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str("/**\n");
-            out.push_str(&format!(" * {group}\n"));
-            out.push_str(" */\n");
-            current_group = group;
-        }
-        out.push_str(&format!("{}: {};\n", token.name, rgba_string(token.color)));
-    }
-    out
+fn scss_rgba(tokens: &[PaletteToken], name: &str) -> String {
+    find_token(tokens, name)
+        .map(|token| rgba_string(token.color))
+        .unwrap_or_else(|| "rgba(0, 0, 0, 1)".to_string())
 }
 
-fn group_for_token(name: &str) -> &'static str {
-    if name.starts_with("$c_primary_action") {
-        "Primary Action"
-    } else if name.starts_with("$c_secondary_action") {
-        "Secondary Action"
-    } else if name.starts_with("$c_tertiary_action") {
-        "Tertiary Action"
-    } else if name.starts_with("$c_primary") {
-        "Primary"
-    } else if name.starts_with("$c_secondary") {
-        "Secondary"
-    } else if name.starts_with("$c_tertiary") {
-        "Tertiary"
-    } else if name.starts_with("$c_success")
-        || name.starts_with("$c_warning")
-        || name.starts_with("$c_error")
-        || name.starts_with("$c_info")
-    {
-        "Semantic"
-    } else if name.starts_with("$c_text") {
-        "Text Roles"
-    } else if name.starts_with("$c_ui_neutral") {
-        "Neutrals"
-    } else {
-        "Support / Utility"
+fn emit_comment(out: &mut String, lines: &[&str]) {
+    out.push_str("/**\n");
+    for line in lines {
+        out.push_str(" * ");
+        out.push_str(line);
+        out.push('\n');
     }
+    out.push_str(" */\n");
+}
+
+fn emit_pair(out: &mut String, tokens: &[PaletteToken], light: &str, dark: &str) {
+    out.push_str(&format!("{light}: {};\n", scss_rgba(tokens, light)));
+    out.push_str(&format!("{dark}: {};\n", scss_rgba(tokens, dark)));
+}
+
+fn emit_blanks(out: &mut String, n: usize) {
+    for _ in 0..n {
+        out.push('\n');
+    }
+}
+
+fn emit_action(out: &mut String, tokens: &[PaletteToken], family: &str, title: &str) {
+    emit_comment(
+        out,
+        &[
+            title,
+            "Action (CTAs / Buttons / Interactions)",
+            "This is your engagement system — designed for clarity, energy, and ADA-compliant interaction states.Every state (default, hover, pressed, disabled) has coordinated surface, border, and text colors for intuitive feedback across light and dark UIs.",
+        ],
+    );
+    for state in ["default", "hover", "pressed", "disabled"] {
+        for part in ["surface", "text", "border"] {
+            emit_pair(
+                out,
+                tokens,
+                &format!("$c_{family}_action_{state}_{part}"),
+                &format!("$c_{family}_action_{state}_{part}--dark"),
+            );
+            emit_blanks(out, 1);
+        }
+    }
+    emit_blanks(out, 3);
+}
+
+fn render_scss(tokens: &[PaletteToken]) -> String {
+    let mut out = String::new();
+
+    emit_comment(
+        &mut out,
+        &[
+            "Primary (Brand Placeholder)",
+            "This is your primary identity color system — the flexible accent that becomes the brand.",
+            "It drives recognition and hierarchy without locking you into a specific color palette. Swap these tones for any client brand.",
+        ],
+    );
+    emit_pair(&mut out, tokens, "$c_primary_default", "$c_primary_default--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_primary_strong", "$c_primary_strong--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_primary_subtle", "$c_primary_subtle--dark");
+    emit_blanks(&mut out, 4);
+
+    emit_comment(
+        &mut out,
+        &[
+            "Secondary (Brand Placeholder)",
+            "This is your secondary identity color system — the flexible accent that becomes the brand.",
+            "It drives recognition and hierarchy without locking you into a specific color palette. Swap these tones for any client brand.",
+        ],
+    );
+    emit_pair(&mut out, tokens, "$c_secondary_default", "$c_secondary_default--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_secondary_strong", "$c_secondary_strong--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_secondary_subtle", "$c_secondary_subtle--dark");
+    emit_blanks(&mut out, 4);
+
+    emit_comment(
+        &mut out,
+        &[
+            "Tertiary (Brand Placeholder)",
+            "This is your tertiary identity color system — the flexible accent that becomes the brand.",
+            "It drives recognition and hierarchy without locking you into a specific color palette. Swap these tones for any client brand.",
+        ],
+    );
+    emit_pair(&mut out, tokens, "$c_tertiary_default", "$c_tertiary_default--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_tertiary_strong", "$c_tertiary_strong--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_tertiary_subtle", "$c_tertiary_subtle--dark");
+    emit_blanks(&mut out, 4);
+
+    emit_action(
+        &mut out,
+        tokens,
+        "primary",
+        "Primary Action (cyan-blue family)",
+    );
+    emit_action(
+        &mut out,
+        tokens,
+        "secondary",
+        "Secondary Action (warm peach family)",
+    );
+    emit_action(
+        &mut out,
+        tokens,
+        "tertiary",
+        "Tertiary Action (coral family)",
+    );
+
+    emit_comment(&mut out, &["Semantic (Status / Feedback / Alerts)"]);
+    for name in [
+        "success", "warning", "error", "info",
+    ] {
+        emit_pair(
+            &mut out,
+            tokens,
+            &format!("$c_{name}_surface"),
+            &format!("$c_{name}_surface--dark"),
+        );
+        emit_blanks(&mut out, 1);
+        emit_pair(
+            &mut out,
+            tokens,
+            &format!("$c_{name}_text"),
+            &format!("$c_{name}_text--dark"),
+        );
+        emit_blanks(&mut out, 1);
+        emit_pair(
+            &mut out,
+            tokens,
+            &format!("$c_{name}_border"),
+            &format!("$c_{name}_border--dark"),
+        );
+        emit_blanks(&mut out, 1);
+    }
+    emit_blanks(&mut out, 3);
+
+    emit_comment(&mut out, &["Text Roles (Color Mapping)"]);
+    emit_pair(&mut out, tokens, "$c_text_primary", "$c_text_primary--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_text_secondary", "$c_text_secondary--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_text_disabled", "$c_text_disabled--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_text_inverse", "$c_text_inverse--dark");
+    emit_blanks(&mut out, 4);
+
+    emit_comment(&mut out, &["Neutrals (Core UI / Backgrounds)"]);
+    emit_pair(&mut out, tokens, "$c_ui_neutral_100", "$c_ui_neutral_100--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_ui_neutral_200", "$c_ui_neutral_200--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_ui_neutral_300", "$c_ui_neutral_300--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_ui_neutral_600", "$c_ui_neutral_600--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_ui_neutral_900", "$c_ui_neutral_900--dark");
+    emit_blanks(&mut out, 3);
+
+    emit_comment(
+        &mut out,
+        &[
+            "Support / Utility",
+            "Used for default overlays, borders, and hover / focus states.",
+        ],
+    );
+    out.push_str("$c_support_overlay: rgba(0, 0, 0, 0.8);\n");
+    out.push_str("$c_support_overlay--dark: rgba(0, 0, 0, 0.8);\n");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_support_border", "$c_support_border--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(&mut out, tokens, "$c_support_focus", "$c_support_focus--dark");
+    emit_blanks(&mut out, 1);
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_support_disabled",
+        "$c_support_disabled--dark",
+    );
+    emit_blanks(&mut out, 4);
+
+    emit_comment(&mut out, &["admin button colors"]);
+    out.push_str(" $c_black: #000000;\n");
+    out.push_str(" $c_red: #bb0000;\n");
+    out.push_str(" $c_blue: #0074BD;\n");
+    out.push_str(" $c_green: #4d8f46;\n");
+    out.push_str(" $c_yellow: #e7ff6f;\n");
+    out.push_str(" $c_white: #ffffff;\n");
+    emit_blanks(&mut out, 4);
+
+    emit_comment(&mut out, &["Social Media Colors"]);
+    out.push_str(" $c_facebook: #3b5998;\n");
+    out.push_str(" $c_twitter: #00aced;\n");
+    out.push_str(" $c_pinterest: #bb0000;\n");
+    out.push_str(" $c_instagram: #777777;\n");
+    out.push_str(" $c_youtube: #777777;\n");
+    out.push_str(" $c_comments: #222222;\n");
+    emit_blanks(&mut out, 4);
+
+    emit_comment(&mut out, &["Default widths"]);
+    out.push_str("$width_xs: 20.5em;\n");
+    out.push_str("$width_sm: 33.5em;\n");
+    out.push_str("$width_md: 48em;\n");
+    out.push_str("$width_lg: 64em;\n");
+    out.push_str("$width_xl: 80em;\n");
+    out.push_str("$width_xxl: 120em;\n");
+    out.push_str("$width_xxxl: 160em;\n");
+    out.push_str("$width_x4k: 240em;\n");
+    out.push_str("$max-width: $width_xxl;\n");
+
+    out
 }
 
 fn find_token<'a>(tokens: &'a [PaletteToken], name: &str) -> Option<&'a PaletteToken> {
@@ -808,6 +1001,30 @@ mod tests {
             .scss
             .contains("$c_text_primary: rgba(28, 30, 33, 1);"));
         assert!(generated.scss.contains("$c_support_focus--dark"));
+        assert!(generated.scss.contains("Primary (Brand Placeholder)"));
+        assert!(generated.scss.contains("$c_support_disabled"));
+        assert!(generated.scss.contains("$c_black: #000000"));
+        assert!(generated.scss.contains("$c_facebook:"));
+        assert!(generated.scss.contains("$width_xs: 20.5em"));
+        assert!(generated.scss.contains("$max-width: $width_xxl"));
+        assert!(generated.scss.contains("$c_support_overlay: rgba(0, 0, 0, 0.8)"));
+    }
+
+    #[test]
+    fn generated_scss_lists_every_framework_variable_name() {
+        let generated = generate_palette(&PaletteState::default()).expect("palette generates");
+        let framework = include_str!("../_variables.scss");
+        for line in framework.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with('$') {
+                continue;
+            }
+            let name = trimmed.split(':').next().expect("variable name");
+            assert!(
+                generated.scss.contains(name),
+                "generated SCSS missing framework variable {name}"
+            );
+        }
     }
 
     #[test]

@@ -1,475 +1,222 @@
-//! # UI Module
-//!
-//! Renders the application's inputs, tabbed content, and help bar.
-
-use crate::app::{ActiveTab, App, InputTarget};
-use crate::palette::PALETTE_EXPORT_PATH;
-use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap},
-    Frame,
+use crate::app::{App, FocusId, Mode};
+use crate::contrast::render_contrast;
+use crate::layout::{
+    breakpoint, centered, split_body_with_fix, split_header, split_shell, LayoutMap,
 };
 
-pub fn render(frame: &mut Frame, app: &App) {
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::Frame;
+
+pub fn render(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().bg(app.theme.base_background_color())),
         size,
     );
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(6),
-            Constraint::Min(8),
-            Constraint::Length(2),
-        ])
-        .split(size);
+    let mut map = LayoutMap {
+        breakpoint: breakpoint(size),
+        ..LayoutMap::default()
+    };
 
-    render_inputs(frame, app, chunks[0]);
-    render_middle(frame, app, chunks[1]);
-    render_help(frame, app, chunks[2]);
+    let shell = split_shell(size);
+    map.footer = shell.footer;
+    map.body = shell.body;
 
-    if app.show_keybindings {
-        render_keybindings_popup(frame, app, size);
+    let header = split_header(shell.header);
+    map.tabs_contrast = header.tabs_contrast;
+    map.tabs_palette = header.tabs_palette;
+    map.target_wcag = header.target_wcag;
+    map.target_apca = header.target_apca;
+    render_header(frame, app, shell.header, &map);
+
+    let (main, fix) = split_body_with_fix(shell.body, map.breakpoint, app.fix_open);
+    if let Some(fix_area) = fix {
+        map.fix_area = fix_area;
+        render_fix_placeholder(frame, app, fix_area);
     }
 
-    if app.show_theme_debug {
-        render_theme_debug_popup(frame, app, size);
+    match app.mode {
+        Mode::Contrast => {
+            let rects = render_contrast(frame, app, main, map.breakpoint);
+            map.fg_input = rects.fg_input;
+            map.fg_swatch = rects.fg_swatch;
+            map.bg_input = rects.bg_input;
+            map.bg_swatch = rects.bg_swatch;
+            map.size_input = rects.size_input;
+            map.size_dec = rects.size_dec;
+            map.size_inc = rects.size_inc;
+            map.weight_input = rects.weight_input;
+            map.weight_dec = rects.weight_dec;
+            map.weight_inc = rects.weight_inc;
+            map.style_btns = rects.style_btns;
+            map.preview_text = rects.preview_text;
+            map.font_family = rects.font_family;
+            map.swap_btn = rects.swap_btn;
+            map.copy_btn = rects.copy_btn;
+            map.fix_btn = rects.fix_btn;
+            map.web_btn = rects.web_btn;
+            map.preview = rects.preview;
+            map.scores_wcag = rects.scores_wcag;
+            map.scores_apca = rects.scores_apca;
+        }
+        Mode::Palette => {
+            let (detail, scrollbar) = render_palette_tab(frame, app, main);
+            map.detail = detail;
+            map.detail_scrollbar = scrollbar;
+        }
+    }
+
+    render_footer(frame, app, shell.footer);
+
+    if app.show_keybindings {
+        let popup = centered(size, 84, 84);
+        map.popup_area = Some(popup);
+        render_keybindings_popup(frame, app, popup);
+    } else if app.show_theme_debug {
+        let popup = centered(size, 72, 82);
+        map.popup_area = Some(popup);
+        render_theme_debug_popup(frame, app, popup);
     }
 
     if !app.show_keybindings && !app.show_theme_debug {
-        if let Some((x, y)) = input_cursor_position(size, app) {
+        if let Some((x, y)) = cursor_position(app, &map) {
             frame.set_cursor_position((x, y));
         }
     }
 
-    render_toast(frame, app, size);
+    if let Some(toast) = render_toast(frame, app, size) {
+        map.toast_area = Some(toast);
+    }
+
+    app.layout = map;
 }
 
-fn render_inputs(frame: &mut Frame, app: &App, area: Rect) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3)])
-        .split(area);
+fn render_header(frame: &mut Frame, app: &App, area: Rect, map: &LayoutMap) {
+    frame.render_widget(
+        Block::default()
+            .title("dd_wcag")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border_active_color()))
+            .style(Style::default().bg(app.theme.base_background_color())),
+        area,
+    );
 
-    let top_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[0]);
-
-    let bottom_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[1]);
-
-    let fg_active = app.input_target == InputTarget::Foreground;
-    let fg_title = if fg_active { "FG (active)" } else { "FG" };
-    let fg_text = if fg_active {
-        app.current_input.clone()
-    } else {
-        app.foreground_input.clone()
-    };
-    render_input_field(frame, app, top_cols[0], fg_title, fg_text, fg_active);
-
-    let bg_active = app.input_target == InputTarget::Background;
-    let bg_title = if bg_active { "BG (active)" } else { "BG" };
-    let bg_text = if bg_active {
-        app.current_input.clone()
-    } else {
-        app.background_input.clone()
-    };
-    render_input_field(frame, app, top_cols[1], bg_title, bg_text, bg_active);
-
-    let preview_active = app.input_target == InputTarget::PreviewText;
-    let preview_title = if preview_active {
-        "PreviewText (active)"
-    } else {
-        "PreviewText"
-    };
-    let preview_text = if preview_active {
-        app.current_input.clone()
-    } else {
-        app.preview_text.replace('\n', "\\n")
-    };
-    render_input_field(
+    paint_tab(
         frame,
         app,
-        bottom_cols[0],
-        preview_title,
-        preview_text,
-        preview_active,
+        map.tabs_contrast,
+        "Contrast",
+        app.mode == Mode::Contrast,
     );
-
-    let font_active = app.input_target == InputTarget::FontFamily;
-    let font_title = if font_active {
-        "FontFamily (active)"
-    } else {
-        "FontFamily"
-    };
-    let font_text = if font_active {
-        app.current_input.clone()
-    } else {
-        app.preview_font_family.clone()
-    };
-    render_input_field(
+    paint_tab(
         frame,
         app,
-        bottom_cols[1],
-        font_title,
-        font_text,
-        font_active,
+        map.tabs_palette,
+        "Palette",
+        app.mode == Mode::Palette,
+    );
+    paint_tab(
+        frame,
+        app,
+        map.target_wcag,
+        &format!("WCAG {} ▾", app.targets.wcag.label()),
+        app.focus == FocusId::TargetWcag,
+    );
+    paint_tab(
+        frame,
+        app,
+        map.target_apca,
+        &format!("APCA {} ▾", app.targets.apca.label()),
+        app.focus == FocusId::TargetApca,
     );
 }
 
-fn render_input_field(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    title: &str,
-    text: String,
-    active: bool,
-) {
-    let title_style = if active {
-        Style::default().fg(app.theme.text_active_focus_color())
-    } else {
-        Style::default().fg(app.theme.text_labels_color())
-    };
-    let border_style = if active {
-        Style::default().fg(app.theme.input_border_focus_color())
-    } else {
-        Style::default().fg(app.theme.input_border_default_color())
-    };
-    let input_style = if active {
+fn paint_tab(frame: &mut Frame, app: &App, area: Rect, label: &str, active: bool) {
+    let style = if active {
         Style::default()
-            .fg(app.theme.input_text_focus_color())
-            .bg(app.theme.body_background_color())
+            .fg(app.theme.text_active_focus_color())
+            .bg(app.theme.selected_background_color())
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default()
-            .fg(app.theme.input_text_default_color())
-            .bg(app.theme.body_background_color())
+        Style::default().fg(app.theme.text_secondary_color())
     };
+    frame.render_widget(Paragraph::new(label).style(style), area);
+}
 
+fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let keys = if area.width < 75 {
+        "F1:Help  F2:Theme  Tab:Focus  Ctrl+G:Gen  Ctrl+F:Fix  Ctrl+O:Web  Ctrl+Q:Quit"
+    } else if area.width < 110 {
+        "F1: Help   F2: Theme   Tab: Focus   1/2: Tabs   Ctrl+G: Generate   Ctrl+F: Fix   Ctrl+O: Web   Ctrl+Q: Quit"
+    } else {
+        "F1: Help   F2: Theme   Tab: Focus   1/2: Contrast/Palette   Ctrl+G: Generate   Ctrl+F: Fix   Ctrl+O: Web   Ctrl+Q: Quit   (mouse: click/scroll/drag)"
+    };
     frame.render_widget(
-        Paragraph::new(text).style(input_style).block(
-            Block::default()
-                .title(Line::styled(title.to_string(), title_style))
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .style(Style::default().bg(app.theme.body_background_color())),
-        ),
+        Paragraph::new(keys)
+            .alignment(Alignment::Left)
+            .style(
+                Style::default()
+                    .fg(app.theme.text_secondary_color())
+                    .bg(app.theme.base_background_color()),
+            ),
         area,
     );
 }
 
-fn render_middle(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(5)])
-        .split(area);
-
-    let titles = ["Input", "Conversions", "Contrast", "Preview", "Palette"];
-    let selected = match app.active_tab {
-        ActiveTab::Input => 0,
-        ActiveTab::Conversions => 1,
-        ActiveTab::Contrast => 2,
-        ActiveTab::Preview => 3,
-        ActiveTab::Palette => 4,
-    };
-
-    let tabs = Tabs::new(titles)
-        .select(selected)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(Line::styled(
-                    "Tabs",
-                    Style::default().fg(app.theme.text_labels_color()),
-                ))
-                .border_style(Style::default().fg(app.theme.border_default_color()))
-                .style(Style::default().bg(app.theme.body_background_color())),
-        )
-        .highlight_style(
-            Style::default()
-                .fg(app.theme.text_active_focus_color())
-                .bg(app.theme.selected_background_color())
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(tabs, chunks[0]);
-
-    match app.active_tab {
-        ActiveTab::Input => render_input_tab(frame, app, chunks[1]),
-        ActiveTab::Conversions => render_conversions_tab(frame, app, chunks[1]),
-        ActiveTab::Contrast => render_contrast_tab(frame, app, chunks[1]),
-        ActiveTab::Preview => render_preview_tab(frame, app, chunks[1]),
-        ActiveTab::Palette => render_palette_tab(frame, app, chunks[1]),
-    }
-}
-
-fn render_input_tab(frame: &mut Frame, app: &App, area: Rect) {
-    let target = match app.input_target {
-        InputTarget::Foreground => "Foreground",
-        InputTarget::Background => "Background",
-        InputTarget::PreviewText => "Preview Text",
-        InputTarget::FontFamily => "Font Family",
-        InputTarget::None => "None",
-    };
-
-    let mut body = vec![
-        Line::from(format!("Current target: {target}")),
-        Line::from("Current input:"),
-    ];
-
-    body.extend(app.current_input.lines().map(Line::from));
-    if app.current_input.is_empty() {
-        body.push(Line::from(""));
-    }
-
-    body.push(Line::from(""));
-    body.push(Line::from("Preview text:"));
-    body.extend(app.preview_text.lines().map(Line::from));
-    if app.preview_text.is_empty() {
-        body.push(Line::from(""));
-    }
-
-    body.push(Line::from(""));
-    body.push(Line::from(format!(
-        "Preview font family: {}",
-        app.preview_font_family
-    )));
-    body.push(Line::from(""));
-    body.push(Line::from(format!(
-        "Last parsed format: {}",
-        app.last_parsed_format.as_deref().unwrap_or("-")
-    )));
-
+fn render_fix_placeholder(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
-        Paragraph::new(body)
+        Paragraph::new("Fix pane — apply a nearby passing candidate (coming next). Esc closes.")
             .style(
                 Style::default()
-                    .fg(app.theme.text_primary_color())
+                    .fg(app.theme.text_secondary_color())
                     .bg(app.theme.body_background_color()),
             )
             .block(
                 Block::default()
-                    .title(Line::styled(
-                        "Input",
-                        Style::default().fg(app.theme.text_labels_color()),
-                    ))
+                    .title("Fix")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_default_color()))
+                    .border_style(Style::default().fg(app.theme.border_active_color()))
                     .style(Style::default().bg(app.theme.body_background_color())),
             ),
         area,
     );
 }
 
-fn render_conversions_tab(frame: &mut Frame, app: &App, area: Rect) {
-    let lines = vec![
-        Line::from("Format | Foreground | Background"),
-        Line::from(format!(
-            "Hex | {} | {}",
-            app.foreground.to_hex(),
-            app.background.to_hex()
-        )),
-        Line::from(format!(
-            "RGB | {} | {}",
-            app.foreground.to_rgb_str(),
-            app.background.to_rgb_str()
-        )),
-        Line::from(format!(
-            "HSL | {} | {}",
-            app.foreground.to_hsl_str(),
-            app.background.to_hsl_str()
-        )),
-    ];
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(
-                Style::default()
-                    .fg(app.theme.text_primary_color())
-                    .bg(app.theme.body_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title(Line::styled(
-                        "Conversions",
-                        Style::default().fg(app.theme.text_labels_color()),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_default_color()))
-                    .style(Style::default().bg(app.theme.body_background_color())),
-            ),
-        area,
-    );
-}
-
-fn render_contrast_tab(frame: &mut Frame, app: &App, area: Rect) {
-    let size = app.font_size_px as f32;
-    let ratio = app.contrast_ratio;
-    let weight = if app.is_bold { "bold" } else { "normal" };
-    let current_pass = app.passes_aa(size, app.is_bold, ratio);
-    let current_threshold = if (app.is_bold && size >= 14.0) || (!app.is_bold && size >= 18.0) {
-        "3.0"
-    } else {
-        "4.5"
+fn cursor_position(app: &App, map: &LayoutMap) -> Option<(u16, u16)> {
+    if app.mode == Mode::Palette && app.palette.editing {
+        return None;
+    }
+    let area = match app.focus {
+        FocusId::FgHex => map.fg_input,
+        FocusId::BgHex => map.bg_input,
+        FocusId::PreviewText => map.preview_text,
+        FocusId::FontFamily => map.font_family,
+        _ => return None,
     };
-
-    let lc = app.foreground.apca_lc(&app.background);
-    let apca_pass =
-        app.foreground
-            .apca_passes(&app.background, app.font_size_px.into(), app.is_bold);
-    let apca_threshold = if size <= 12.0 {
-        if app.is_bold {
-            75.0
-        } else {
-            90.0
-        }
-    } else if size <= 18.0 {
-        if app.is_bold {
-            60.0
-        } else {
-            75.0
-        }
-    } else if size <= 24.0 {
-        if app.is_bold {
-            45.0
-        } else {
-            60.0
-        }
-    } else {
-        if app.is_bold {
-            30.0
-        } else {
-            45.0
-        }
-    };
-
-    let mut lines = vec![
-        Line::from("WCAG Current Result"),
-        Line::from(vec![
-            Span::raw(format!(
-                "{size:.0}px {weight} | ratio {ratio:.2} | needs >= {current_threshold} | "
-            )),
-            Span::styled(
-                if current_pass { "PASS" } else { "FAIL" },
-                Style::default().fg(if current_pass {
-                    app.theme.success_color()
-                } else {
-                    app.theme.error_color()
-                }),
-            ),
-        ]),
-        Line::from(""),
-        Line::from("APCA Current Result"),
-        Line::from(vec![
-            Span::raw(format!(
-                "{size:.0}px {weight} | Lc {lc:.2} | needs >= {apca_threshold:.0} | "
-            )),
-            Span::styled(
-                if apca_pass { "PASS" } else { "FAIL" },
-                Style::default().fg(if apca_pass {
-                    app.theme.success_color()
-                } else {
-                    app.theme.error_color()
-                }),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(format!("WCAG Quick Reference ({weight})")),
-        Line::from("Size | Ratio | Result"),
-    ];
-
-    for quick_size in [12.0_f32, 14.0, 16.0, 18.0] {
-        let quick_pass = app.passes_aa(quick_size, app.is_bold, ratio);
-        lines.push(Line::from(vec![
-            Span::raw(format!("{quick_size:.0}px | {ratio:.2} | ")),
-            Span::styled(
-                if quick_pass { "PASS" } else { "FAIL" },
-                Style::default().fg(if quick_pass {
-                    app.theme.success_color()
-                } else {
-                    app.theme.error_color()
-                }),
-            ),
-        ]));
+    if area.width < 2 {
+        return None;
     }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(format!("APCA Quick Reference ({weight})")));
-    lines.push(Line::from("Size | Lc | Result"));
-
-    for quick_size in [12, 14, 16, 18, 24] {
-        let quick_apca_pass = app
-            .foreground
-            .apca_passes(&app.background, quick_size, app.is_bold);
-        lines.push(Line::from(vec![
-            Span::raw(format!("{quick_size}px | {lc:.2} | ")),
-            Span::styled(
-                if quick_apca_pass { "PASS" } else { "FAIL" },
-                Style::default().fg(if quick_apca_pass {
-                    app.theme.success_color()
-                } else {
-                    app.theme.error_color()
-                }),
-            ),
-        ]));
-    }
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(
-                Style::default()
-                    .fg(app.theme.text_primary_color())
-                    .bg(app.theme.body_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title(Line::styled(
-                        "Contrast",
-                        Style::default().fg(app.theme.text_labels_color()),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_default_color()))
-                    .style(Style::default().bg(app.theme.body_background_color())),
-            ),
-        area,
-    );
+    let col = app.cursor_char_idx.min(u16::MAX as usize) as u16;
+    let x = area
+        .x
+        .saturating_add(col)
+        .min(area.x.saturating_add(area.width.saturating_sub(1)));
+    Some((x, area.y))
 }
 
-fn render_preview_tab(frame: &mut Frame, app: &App, area: Rect) {
-    let mut style = app.foreground.to_style().bg(app.background.to_tui_color());
-    let font_size = app.font_size_px;
-    let weight = if app.is_bold { "bold" } else { "normal" };
-
-    if app.is_bold {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-
-    frame.render_widget(
-        Paragraph::new(app.preview_text.as_str())
-            .style(style)
-            .block(
-                Block::default()
-                    .title(format!("Preview ({font_size}px, {weight})"))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_default_color())),
-            ),
-        area,
-    );
-}
-
-fn render_palette_tab(frame: &mut Frame, app: &App, area: Rect) {
+fn render_palette_tab(frame: &mut Frame, app: &mut App, area: Rect) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(area);
 
     render_palette_inputs(frame, app, chunks[0]);
-    render_palette_detail(frame, app, chunks[1]);
+    let scrollbar = render_palette_detail(frame, app, chunks[1]);
+    (chunks[1], scrollbar)
 }
 
 fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) {
@@ -498,15 +245,9 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) {
 
     lines.extend([
         Line::from(""),
-        Line::from("* required"),
-        Line::from(""),
-        Line::from("Enter: edit"),
-        Line::from("G: generate"),
-        Line::from("Up/Down: select or scroll"),
-        Line::from("F then G: apply to FG"),
-        Line::from("B then G: apply to BG"),
-        Line::from(format!("Ctrl+S: save {PALETTE_EXPORT_PATH}")),
-        Line::from("Ctrl+C: copy values"),
+        Line::from("* required   Text roles are fixed"),
+        Line::from("Enter: edit   Ctrl+G: generate"),
+        Line::from("Ctrl+S: save (choose file)   Ctrl+C: copy"),
     ]);
 
     frame.render_widget(
@@ -530,7 +271,7 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
+fn render_palette_detail(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
     let selected = app.palette.selected();
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
@@ -570,7 +311,6 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
             blocking.len(),
             advisory.len()
         )));
-
         lines.push(Line::from(""));
         lines.push(Line::from("Generated tokens:"));
         let prefix = format!("$c_{}", selected.label().to_lowercase());
@@ -590,7 +330,6 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]));
         }
-
         lines.push(Line::from(""));
         lines.push(Line::from("All generated variables:"));
         for token in &generated.tokens {
@@ -605,7 +344,6 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]));
         }
-
         lines.push(Line::from(""));
         lines.push(Line::from("Compliance checks:"));
         for check in &generated.checks {
@@ -628,40 +366,23 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
         lines.extend([
             Line::from("Generated: none"),
             Line::from(""),
-            Line::from("Press G to generate a compliant _palette.scss draft."),
+            Line::from("Press Ctrl+G to generate a compliant _palette.scss draft."),
             Line::from("Text roles are fixed and will not be changed."),
         ]);
     }
 
-    if let Some(target) = app.palette.pending_apply {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(
-            format!(
-                "Pending: press G to apply selected color to {}",
-                target.label()
-            ),
-            Style::default().fg(app.theme.info_color()),
-        ));
-    }
-
     let visible_height = area.height.saturating_sub(2).max(1) as usize;
     let max_scroll = lines.len().saturating_sub(visible_height);
-    let scroll = app.palette.detail_scroll.min(max_scroll);
-    let mut visible_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(scroll)
-        .take(visible_height)
-        .collect();
-    if max_scroll > 0 && !visible_lines.is_empty() {
-        visible_lines[0] = Line::from(vec![
-            Span::styled(
-                format!("Scroll {}/{}  ", scroll + 1, max_scroll + 1),
-                Style::default().fg(app.theme.text_secondary_color()),
-            ),
-            Span::raw("Up/Down"),
-        ]);
-    }
+    app.palette.detail_max_scroll = max_scroll;
+    app.palette.detail_scroll = app.palette.detail_scroll.min(max_scroll);
+    let scroll = app.palette.detail_scroll;
+    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible_height).collect();
     let show_scrollbar = max_scroll > 0;
+    let title = if max_scroll > 0 {
+        format!("Generated Detail  {}/{}", scroll + 1, max_scroll + 1)
+    } else {
+        "Selected / Generated Detail".to_string()
+    };
 
     frame.render_widget(
         Paragraph::new(visible_lines)
@@ -673,125 +394,71 @@ fn render_palette_detail(frame: &mut Frame, app: &App, area: Rect) {
             .block(
                 Block::default()
                     .title(Line::styled(
-                        "Selected / Generated Detail",
-                        Style::default().fg(app.theme.text_labels_color()),
+                        title,
+                        Style::default().fg(if app.focus == FocusId::Detail {
+                            app.theme.text_active_focus_color()
+                        } else {
+                            app.theme.text_labels_color()
+                        }),
                     ))
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_default_color()))
+                    .border_style(Style::default().fg(if app.focus == FocusId::Detail {
+                        app.theme.border_active_color()
+                    } else {
+                        app.theme.border_default_color()
+                    }))
                     .style(Style::default().bg(app.theme.body_background_color())),
             )
-            .wrap(Wrap { trim: true }),
+            .wrap(Wrap { trim: false }),
         area,
     );
 
+    let mut scrollbar = Rect::default();
     if show_scrollbar {
         render_vertical_scrollbar(frame, app, area, scroll, max_scroll);
+        scrollbar = Rect {
+            x: area.x.saturating_add(area.width.saturating_sub(2)),
+            y: area.y.saturating_add(1),
+            width: 1,
+            height: area.height.saturating_sub(2),
+        };
     }
+    scrollbar
 }
 
-fn render_help(frame: &mut Frame, app: &App, area: Rect) {
-    let focus = match app.active_tab {
-        ActiveTab::Input => match app.input_target {
-            InputTarget::Foreground => "Input > FG",
-            InputTarget::Background => "Input > BG",
-            InputTarget::PreviewText => "Input > PreviewText",
-            InputTarget::FontFamily => "Input > FontFamily",
-            InputTarget::None => "Input",
-        },
-        ActiveTab::Conversions => "Conversions",
-        ActiveTab::Contrast => "Contrast",
-        ActiveTab::Preview => "Preview",
-        ActiveTab::Palette => {
-            if app.palette.editing {
-                "Palette > Edit"
-            } else {
-                "Palette"
-            }
-        }
-    };
-
-    let help = Paragraph::new(format!(
-        "Focus: {focus} | Theme: {} | F1: keybindings | F2: theme",
-        app.theme_source.label()
-    ))
-    .alignment(Alignment::Center)
-    .style(
-        Style::default()
-            .fg(app.theme.text_secondary_color())
-            .bg(app.theme.base_background_color()),
-    )
-    .block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(app.theme.border_default_color()))
-            .style(Style::default().bg(app.theme.base_background_color())),
-    );
-    frame.render_widget(help, area);
-}
-
-fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
-}
-
-fn bottom_right_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width.saturating_sub(2)).max(20);
-    let height = height.min(area.height.saturating_sub(2)).max(3);
-    Rect {
-        x: area.x.saturating_add(area.width.saturating_sub(width + 1)),
-        y: area
-            .y
-            .saturating_add(area.height.saturating_sub(height + 1)),
-        width,
-        height,
-    }
-}
-
-fn render_toast(frame: &mut Frame, app: &App, area: Rect) {
+fn render_toast(frame: &mut Frame, app: &App, area: Rect) -> Option<Rect> {
     let (title, message, border_color) = if let Some(error) = &app.error {
         ("Error", error.as_str(), app.theme.error_color())
     } else if let Some(status) = &app.status {
         ("Status", status.as_str(), app.theme.info_color())
     } else {
-        return;
+        return None;
     };
 
     let line_count = message.lines().count().max(1) as u16;
-    let toast = bottom_right_rect(area, 54, line_count.saturating_add(2).clamp(3, 7));
+    let toast = crate::layout::bottom_right_rect(area, 32, line_count.saturating_add(2).clamp(3, 4));
     frame.render_widget(Clear, toast);
-    let widget = Paragraph::new(message)
-        .style(
-            Style::default()
-                .fg(app.theme.modal_text_color())
-                .bg(app.theme.modal_background_color()),
-        )
-        .block(
-            Block::default()
-                .title(Line::styled(
-                    title,
-                    Style::default().fg(app.theme.modal_labels_color()),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color))
-                .style(Style::default().bg(app.theme.modal_background_color())),
-        )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(widget, toast);
+    frame.render_widget(
+        Paragraph::new(message)
+            .style(
+                Style::default()
+                    .fg(app.theme.modal_text_color())
+                    .bg(app.theme.modal_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title(Line::styled(
+                        title,
+                        Style::default().fg(app.theme.modal_labels_color()),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
+                    .style(Style::default().bg(app.theme.modal_background_color())),
+            )
+            .wrap(Wrap { trim: true }),
+        toast,
+    );
+    Some(toast)
 }
 
 fn render_vertical_scrollbar(
@@ -828,10 +495,19 @@ fn render_vertical_scrollbar(
     } else {
         ((scroll as u32 * track_height.saturating_sub(1) as u32) / max_scroll as u32) as u16
     };
+    let thumb_color = if app
+        .mouse_pos
+        .is_some_and(|(col, row)| col == x && row >= area.y && row < area.y + area.height)
+        || app.scrollbar_dragging
+    {
+        app.theme.scrollbar_hover_color()
+    } else {
+        app.theme.scrollbar_color()
+    };
     frame.render_widget(
         Paragraph::new("█").style(
             Style::default()
-                .fg(app.theme.scrollbar_color())
+                .fg(thumb_color)
                 .bg(app.theme.body_background_color()),
         ),
         Rect {
@@ -843,55 +519,67 @@ fn render_vertical_scrollbar(
     );
 }
 
-fn render_keybindings_popup(frame: &mut Frame, app: &App, area: Rect) {
-    let popup = centered_rect(area, 80, 70);
+fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
     frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from("Navigation"),
-        Line::from("Tab / Shift+Tab: cycle focus and auto-apply FG/BG/PreviewText/FontFamily"),
-        Line::from("Left / Right: move cursor in active input field"),
-        Line::from("Enter: insert newline when focus is PreviewText"),
-        Line::from("Backspace: delete before cursor in active input field"),
-        Line::from(""),
-        Line::from("Actions"),
-        Line::from("Ctrl+Up / Ctrl+Down: increase/decrease font size (6..=120)"),
-        Line::from("Ctrl+B: toggle bold"),
-        Line::from("Ctrl+F: toggle preset Google font family"),
-        Line::from(format!("Ctrl+S: save palette to {PALETTE_EXPORT_PATH}")),
-        Line::from("Ctrl+C: copy generated palette values"),
-        Line::from("Palette: F then G applies selected color to FG"),
-        Line::from("Palette: B then G applies selected color to BG"),
-        Line::from("F1: open keybindings popup"),
-        Line::from("F2: open theme debug popup"),
-        Line::from("Ctrl+O: open web preview (/tmp/dd_wcag_preview.html)"),
+        Line::from("1 / 2: Contrast / Palette"),
+        Line::from("Tab / Shift+Tab: next/prev control (auto-apply; invalid color blocks the move)"),
+        Line::from("Left / Right: caret in a text field; Style chips: previous/next preset"),
+        Line::from("Up / Down: Size/Weight step; Style chips: previous/next; Palette list scroll"),
+        Line::from("Ctrl+Up / Ctrl+Down: step the focused Size, Weight, Style, or Fix gauge"),
+        Line::from("Shift+Ctrl+Up / Shift+Ctrl+Down: larger step (size ±4, weight ±200)"),
+        Line::from("Enter: commit field, activate button, edit palette role, newline in PreviewText"),
+        Line::from("Backspace: delete before caret"),
+        Line::from("Esc: blur edit, close Fix, close this popup or F2 (never quits)"),
         Line::from("Ctrl+Q: quit"),
-        Line::from("Esc: close this popup (or close error / quit when popup is not open)"),
+        Line::from(""),
+        Line::from("Contrast"),
+        Line::from("Ctrl+S: cycle Regular / Bold / Italic / Bold+Italic"),
+        Line::from("Left/Right or Up/Down on Style: select a chip (underlined = keyboard focus)"),
+        Line::from("Ctrl+B: toggle bold (400↔700)   Ctrl+T: cycle font family presets"),
+        Line::from("Space: swap FG/BG (on Style: apply the focused chip)"),
+        Line::from("Ctrl+C: copy focused hex   Ctrl+F: toggle Fix pane   Ctrl+O: web preview"),
+        Line::from(""),
+        Line::from("Palette"),
+        Line::from("Ctrl+G: generate full _palette.scss (focuses the detail list to scroll)"),
+        Line::from("Enter: begin/commit role edit   Up/Down: select role; Detail: scroll"),
+        Line::from("PageUp / PageDown: scroll generated output"),
+        Line::from("Ctrl+S: save via file picker   Ctrl+C: copy generated SCSS"),
+        Line::from(""),
+        Line::from("F1: this help   F2: theme source and tokens"),
+        Line::from(""),
+        Line::from("Mouse"),
+        Line::from("Click a field: focus + place caret   Click tab / WCAG / APCA: switch or cycle"),
+        Line::from("Click ↓/↑: step size or weight   Wheel over size/weight: same as Ctrl+Up/Down"),
+        Line::from("Click a style chip: apply it   Click Swap / Copy / Fix / Web: that action"),
+        Line::from("Click toast: dismiss   Click outside F1/F2: close"),
+        Line::from("Shift+click a swatch: copy that hex"),
     ];
-
-    let widget = Paragraph::new(lines)
-        .style(
-            Style::default()
-                .fg(app.theme.modal_text_color())
-                .bg(app.theme.modal_background_color()),
-        )
-        .block(
-            Block::default()
-                .title(Line::styled(
-                    "Keybindings",
-                    Style::default().fg(app.theme.modal_labels_color()),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.border_active_color()))
-                .style(Style::default().bg(app.theme.modal_background_color())),
-        )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(widget, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.modal_text_color())
+                    .bg(app.theme.modal_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title(Line::styled(
+                        "Keys & Mouse",
+                        Style::default().fg(app.theme.modal_labels_color()),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_active_color()))
+                    .style(Style::default().bg(app.theme.modal_background_color())),
+            )
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
 }
 
-fn render_theme_debug_popup(frame: &mut Frame, app: &App, area: Rect) {
-    let popup = centered_rect(area, 72, 82);
+fn render_theme_debug_popup(frame: &mut Frame, app: &App, popup: Rect) {
     frame.render_widget(Clear, popup);
-
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -915,7 +603,6 @@ fn render_theme_debug_popup(frame: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(""),
     ];
-
     for (key, value) in app.theme.tokens() {
         lines.push(Line::from(vec![
             Span::styled(
@@ -925,25 +612,26 @@ fn render_theme_debug_popup(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(value.to_string(), Style::default().fg(theme_color(value))),
         ]));
     }
-
-    let widget = Paragraph::new(lines)
-        .style(
-            Style::default()
-                .fg(app.theme.modal_text_color())
-                .bg(app.theme.modal_background_color()),
-        )
-        .block(
-            Block::default()
-                .title(Line::styled(
-                    "Theme",
-                    Style::default().fg(app.theme.modal_labels_color()),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.border_active_color()))
-                .style(Style::default().bg(app.theme.modal_background_color())),
-        )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(widget, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.modal_text_color())
+                    .bg(app.theme.modal_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title(Line::styled(
+                        "Theme",
+                        Style::default().fg(app.theme.modal_labels_color()),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_active_color()))
+                    .style(Style::default().bg(app.theme.modal_background_color())),
+            )
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
 }
 
 fn theme_color(input: &str) -> ratatui::style::Color {
@@ -961,136 +649,4 @@ fn theme_color(input: &str) -> ratatui::style::Color {
         return ratatui::style::Color::Reset;
     };
     ratatui::style::Color::Rgb(r, g, b)
-}
-
-fn input_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
-    if app.active_tab == ActiveTab::Palette && app.palette.editing {
-        return palette_cursor_position(size, app);
-    }
-
-    if app.active_tab != ActiveTab::Input || app.input_target == InputTarget::None {
-        return None;
-    }
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(6),
-            Constraint::Min(8),
-            Constraint::Length(2),
-        ])
-        .split(size);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3)])
-        .split(chunks[0]);
-
-    let top_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[0]);
-
-    let bottom_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[1]);
-
-    let (cursor_row, cursor_col) = app.cursor_line_col();
-
-    let (base_x, base_y, max_x, max_y) = match app.input_target {
-        InputTarget::Foreground => (
-            top_cols[0].x.saturating_add(1),
-            top_cols[0].y.saturating_add(1),
-            top_cols[0]
-                .x
-                .saturating_add(top_cols[0].width.saturating_sub(2)),
-            top_cols[0]
-                .y
-                .saturating_add(top_cols[0].height.saturating_sub(2)),
-        ),
-        InputTarget::Background => (
-            top_cols[1].x.saturating_add(1),
-            top_cols[1].y.saturating_add(1),
-            top_cols[1]
-                .x
-                .saturating_add(top_cols[1].width.saturating_sub(2)),
-            top_cols[1]
-                .y
-                .saturating_add(top_cols[1].height.saturating_sub(2)),
-        ),
-        InputTarget::PreviewText => (
-            bottom_cols[0].x.saturating_add(1),
-            bottom_cols[0].y.saturating_add(1),
-            bottom_cols[0]
-                .x
-                .saturating_add(bottom_cols[0].width.saturating_sub(2)),
-            bottom_cols[0]
-                .y
-                .saturating_add(bottom_cols[0].height.saturating_sub(2)),
-        ),
-        InputTarget::FontFamily => (
-            bottom_cols[1].x.saturating_add(1),
-            bottom_cols[1].y.saturating_add(1),
-            bottom_cols[1]
-                .x
-                .saturating_add(bottom_cols[1].width.saturating_sub(2)),
-            bottom_cols[1]
-                .y
-                .saturating_add(bottom_cols[1].height.saturating_sub(2)),
-        ),
-        InputTarget::None => return None,
-    };
-
-    let (x, y) = if app.input_target == InputTarget::PreviewText {
-        let width = bottom_cols[0].width.saturating_sub(2).max(1);
-        let wrapped_rows = cursor_col / width;
-        let wrapped_col = cursor_col % width;
-        let y = base_y
-            .saturating_add(cursor_row)
-            .saturating_add(wrapped_rows)
-            .min(max_y);
-        let x = base_x.saturating_add(wrapped_col).min(max_x);
-        (x, y)
-    } else {
-        let x = base_x.saturating_add(cursor_col).min(max_x);
-        (x, base_y)
-    };
-
-    Some((x, y))
-}
-
-fn palette_cursor_position(size: Rect, app: &App) -> Option<(u16, u16)> {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(6),
-            Constraint::Min(8),
-            Constraint::Length(2),
-        ])
-        .split(size);
-
-    let middle_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(5)])
-        .split(chunks[1]);
-
-    let palette_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(middle_chunks[1]);
-
-    let row = app.palette.selected_idx.min(3) as u16;
-    let input_start_col = 13;
-    let x = palette_chunks[0]
-        .x
-        .saturating_add(1 + input_start_col)
-        .saturating_add(app.palette.cursor_col())
-        .min(
-            palette_chunks[0]
-                .x
-                .saturating_add(palette_chunks[0].width.saturating_sub(2)),
-        );
-    let y = palette_chunks[0].y.saturating_add(1).saturating_add(row);
-    Some((x, y))
 }

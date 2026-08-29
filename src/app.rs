@@ -5,14 +5,216 @@
 //! input handling, and UI state as per the architecture spec.
 
 use crate::color::Color;
-use crate::palette::{
-    generate_palette, parse_palette_color, validate_export, PaletteApplyTarget, PaletteState,
-};
+use crate::layout::{Hit, LayoutMap};
+use crate::palette::{generate_palette, parse_palette_color, validate_export, PaletteState};
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
 use std::time::{Duration, Instant};
 
 pub const TOAST_TTL: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Contrast,
+    Palette,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WcagLevel {
+    #[default]
+    Aa,
+    Aaa,
+}
+
+impl WcagLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Aa => "AA",
+            Self::Aaa => "AAA",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Aa => Self::Aaa,
+            Self::Aaa => Self::Aa,
+        }
+    }
+
+    pub fn text_threshold(self, large: bool) -> f64 {
+        match (self, large) {
+            (Self::Aa, false) => 4.5,
+            (Self::Aa, true) => 3.0,
+            (Self::Aaa, false) => 7.0,
+            (Self::Aaa, true) => 4.5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApcaTarget {
+    Lc45,
+    Lc60,
+    #[default]
+    Lc75,
+    Lc90,
+}
+
+impl ApcaTarget {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lc45 => "Lc45",
+            Self::Lc60 => "Lc60",
+            Self::Lc75 => "Lc75",
+            Self::Lc90 => "Lc90",
+        }
+    }
+
+    pub fn value(self) -> f64 {
+        match self {
+            Self::Lc45 => 45.0,
+            Self::Lc60 => 60.0,
+            Self::Lc75 => 75.0,
+            Self::Lc90 => 90.0,
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Lc45 => Self::Lc60,
+            Self::Lc60 => Self::Lc75,
+            Self::Lc75 => Self::Lc90,
+            Self::Lc90 => Self::Lc45,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Targets {
+    pub wcag: WcagLevel,
+    pub apca: ApcaTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FocusId {
+    #[default]
+    FgHex,
+    BgHex,
+    Size,
+    Weight,
+    Style,
+    PreviewText,
+    FontFamily,
+    Swap,
+    CopyHex,
+    FixBtn,
+    OpenPreview,
+    Role(usize),
+    Generate,
+    Matrix,
+    Detail,
+    NudgeFg,
+    NudgeBg,
+    ApplyFix,
+    NextFix,
+    CloseFix,
+    Tabs,
+    TargetWcag,
+    TargetApca,
+}
+
+impl FocusId {
+    pub fn is_text_field(self) -> bool {
+        matches!(
+            self,
+            Self::FgHex | Self::BgHex | Self::PreviewText | Self::FontFamily
+        )
+    }
+
+    pub fn contrast_order() -> &'static [FocusId] {
+        &[
+            FocusId::FgHex,
+            FocusId::BgHex,
+            FocusId::Size,
+            FocusId::Weight,
+            FocusId::Style,
+            FocusId::PreviewText,
+            FocusId::FontFamily,
+            FocusId::Swap,
+            FocusId::CopyHex,
+            FocusId::FixBtn,
+            FocusId::OpenPreview,
+        ]
+    }
+
+    pub fn palette_order() -> &'static [FocusId] {
+        &[
+            FocusId::Role(0),
+            FocusId::Role(1),
+            FocusId::Role(2),
+            FocusId::Role(3),
+            FocusId::Size,
+            FocusId::Weight,
+            FocusId::Generate,
+            FocusId::Matrix,
+            FocusId::Detail,
+        ]
+    }
+
+    pub fn fix_order() -> &'static [FocusId] {
+        &[
+            FocusId::NudgeFg,
+            FocusId::NudgeBg,
+            FocusId::ApplyFix,
+            FocusId::NextFix,
+            FocusId::CloseFix,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StylePreset {
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+impl StylePreset {
+    pub const ALL: [Self; 4] = [Self::Regular, Self::Bold, Self::Italic, Self::BoldItalic];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Regular => "Reg",
+            Self::Bold => "Bld",
+            Self::Italic => "Itl",
+            Self::BoldItalic => "B+I",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Regular => 0,
+            Self::Bold => 1,
+            Self::Italic => 2,
+            Self::BoldItalic => 3,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL[index.min(3)]
+    }
+
+    pub fn apply(self) -> (u16, bool) {
+        match self {
+            Self::Regular => (400, false),
+            Self::Bold => (700, false),
+            Self::Italic => (400, true),
+            Self::BoldItalic => (700, true),
+        }
+    }
+}
 
 // Enum for active input target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +226,9 @@ pub enum InputTarget {
     None,
 }
 
-// Enum for active tab
+// Enum for active tab (legacy; Mode is the displayed tab)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ActiveTab {
     Input,
     Conversions,
@@ -52,6 +255,19 @@ pub struct App {
     pub preview_font_family: String,
     pub font_size_px: u16,
     pub is_bold: bool,
+    pub weight: u16,
+    pub italic: bool,
+    pub style_chip: usize,
+    pub mode: Mode,
+    pub focus: FocusId,
+    pub editing: bool,
+    pub fix_open: bool,
+    pub targets: Targets,
+    pub layout: LayoutMap,
+    pub hovered: Option<Hit>,
+    pub mouse_pos: Option<(u16, u16)>,
+    pub scrollbar_dragging: bool,
+    pub last_mouse_click_pos: Option<(u16, u16, Instant)>,
     pub error: Option<String>,
     pub status: Option<String>,
     pub notification_updated_at: Option<Instant>,
@@ -88,14 +304,27 @@ impl App {
             contrast_ratio: 21.0, // Default black on white
             preview_text: "The quick brown fox jumps over the lazy dog.".to_string(),
             preview_font_family: "Roboto".to_string(),
-            font_size_px: 12,
+            font_size_px: 16,
             is_bold: false,
+            weight: 400,
+            italic: false,
+            style_chip: 0,
+            mode: Mode::Contrast,
+            focus: FocusId::FgHex,
+            editing: true,
+            fix_open: false,
+            targets: Targets::default(),
+            layout: LayoutMap::default(),
+            hovered: None,
+            mouse_pos: None,
+            scrollbar_dragging: false,
+            last_mouse_click_pos: None,
             error: None,
             status: None,
             notification_updated_at: None,
             show_keybindings: false,
             show_theme_debug: false,
-            active_tab: ActiveTab::Input,
+            active_tab: ActiveTab::Contrast,
             theme,
             theme_source,
             palette: PaletteState::default(),
@@ -106,6 +335,160 @@ impl App {
     pub fn adjust_font_size(&mut self, delta: i16) {
         let updated = self.font_size_px as i16 + delta;
         self.font_size_px = updated.clamp(6, 120) as u16;
+    }
+
+    pub fn adjust_weight(&mut self, delta: i16) {
+        let updated = self.weight as i16 + delta;
+        self.weight = ((updated / 100) * 100).clamp(100, 900) as u16;
+        self.is_bold = self.weight >= 700;
+    }
+
+    pub fn apply_style_preset(&mut self, preset: StylePreset) {
+        let (weight, italic) = preset.apply();
+        self.weight = weight;
+        self.italic = italic;
+        self.is_bold = weight >= 700;
+        self.style_chip = preset.index();
+    }
+
+    pub fn move_style_chip(&mut self, delta: i16) {
+        let len = StylePreset::ALL.len() as i16;
+        let next = (self.style_chip as i16 + delta).rem_euclid(len) as usize;
+        self.apply_style_preset(StylePreset::from_index(next));
+    }
+
+    pub fn active_style_preset(&self) -> Option<StylePreset> {
+        match (self.weight, self.italic) {
+            (400, false) => Some(StylePreset::Regular),
+            (700, false) => Some(StylePreset::Bold),
+            (400, true) => Some(StylePreset::Italic),
+            (700, true) => Some(StylePreset::BoldItalic),
+            _ => None,
+        }
+    }
+
+    pub fn cycle_style(&mut self) {
+        let next = match self.active_style_preset() {
+            Some(StylePreset::Regular) => StylePreset::Bold,
+            Some(StylePreset::Bold) => StylePreset::Italic,
+            Some(StylePreset::Italic) => StylePreset::BoldItalic,
+            Some(StylePreset::BoldItalic) | None => StylePreset::Regular,
+        };
+        self.apply_style_preset(next);
+    }
+
+    pub fn toggle_bold_preset(&mut self) {
+        if self.weight >= 700 {
+            self.weight = 400;
+        } else {
+            self.weight = 700;
+        }
+        self.is_bold = self.weight >= 700;
+        self.style_chip = self.active_style_preset().map(StylePreset::index).unwrap_or(self.style_chip);
+    }
+
+    pub fn swap_colors(&mut self) {
+        std::mem::swap(&mut self.foreground, &mut self.background);
+        std::mem::swap(&mut self.foreground_input, &mut self.background_input);
+        std::mem::swap(&mut self.parsed_fg, &mut self.parsed_bg);
+        match self.input_target {
+            InputTarget::Foreground => {
+                self.current_input = self.foreground_input.clone();
+                self.cursor_char_idx = self.current_input.chars().count();
+            }
+            InputTarget::Background => {
+                self.current_input = self.background_input.clone();
+                self.cursor_char_idx = self.current_input.chars().count();
+            }
+            _ => {}
+        }
+        self.update_contrast();
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.active_tab = match mode {
+            Mode::Contrast => ActiveTab::Contrast,
+            Mode::Palette => ActiveTab::Palette,
+        };
+        self.focus = match mode {
+            Mode::Contrast => FocusId::FgHex,
+            Mode::Palette => FocusId::Role(0),
+        };
+        self.sync_focus_input();
+    }
+
+    pub fn set_focus(&mut self, focus: FocusId) {
+        self.focus = focus;
+        if focus == FocusId::Style {
+            self.style_chip = self
+                .active_style_preset()
+                .map(StylePreset::index)
+                .unwrap_or(self.style_chip);
+        }
+        self.sync_focus_input();
+    }
+
+    fn sync_focus_input(&mut self) {
+        let target = match self.focus {
+            FocusId::FgHex => InputTarget::Foreground,
+            FocusId::BgHex => InputTarget::Background,
+            FocusId::PreviewText => InputTarget::PreviewText,
+            FocusId::FontFamily => InputTarget::FontFamily,
+            _ => InputTarget::None,
+        };
+        if target != self.input_target {
+            self.set_input_target(target);
+        }
+        self.editing = self.focus.is_text_field();
+    }
+
+    pub fn focus_order(&self) -> Vec<FocusId> {
+        let mut order = match self.mode {
+            Mode::Contrast => FocusId::contrast_order().to_vec(),
+            Mode::Palette => FocusId::palette_order().to_vec(),
+        };
+        if self.fix_open {
+            order.extend_from_slice(FocusId::fix_order());
+        }
+        order
+    }
+
+    pub fn cycle_focus(&mut self, reverse: bool) -> bool {
+        let order = self.focus_order();
+        if order.is_empty() {
+            return true;
+        }
+        let current = order.iter().position(|id| *id == self.focus).unwrap_or(0);
+        let next = if reverse {
+            if current == 0 {
+                order.len() - 1
+            } else {
+                current - 1
+            }
+        } else {
+            (current + 1) % order.len()
+        };
+        self.set_focus(order[next]);
+        true
+    }
+
+    pub fn copy_focused_hex(&self) -> Option<String> {
+        match self.focus {
+            FocusId::FgHex => Some(self.foreground.to_hex()),
+            FocusId::BgHex => Some(self.background.to_hex()),
+            FocusId::Role(idx) => {
+                let input = match idx {
+                    0 => self.palette.primary_input.as_str(),
+                    1 => self.palette.secondary_input.as_str(),
+                    2 => self.palette.tertiary_input.as_str(),
+                    3 => self.palette.support_input.as_str(),
+                    _ => return None,
+                };
+                parse_palette_color(input).ok().map(|c| c.to_hex())
+            }
+            _ => None,
+        }
     }
 
     pub fn set_input_target(&mut self, target: InputTarget) {
@@ -347,52 +730,6 @@ impl App {
         validate_export(self.palette.generated.as_ref(), action)
     }
 
-    pub fn apply_selected_palette_color(&mut self, target: PaletteApplyTarget) -> bool {
-        let selected = self.palette.selected();
-        let input = self.palette.selected_input().to_string();
-        match parse_palette_color(&input) {
-            Ok(color) => {
-                let hex = color.to_hex();
-                match target {
-                    PaletteApplyTarget::Foreground => {
-                        self.foreground = color;
-                        self.parsed_fg = Some(color);
-                        self.foreground_input = hex.clone();
-                        if self.input_target == InputTarget::Foreground {
-                            self.current_input = hex.clone();
-                            self.cursor_char_idx = self.current_input.chars().count();
-                        }
-                    }
-                    PaletteApplyTarget::Background => {
-                        self.background = color;
-                        self.parsed_bg = Some(color);
-                        self.background_input = hex.clone();
-                        if self.input_target == InputTarget::Background {
-                            self.current_input = hex.clone();
-                            self.cursor_char_idx = self.current_input.chars().count();
-                        }
-                    }
-                }
-                self.palette.pending_apply = None;
-                self.last_parsed_format = Some("HEX".to_string());
-                self.update_contrast();
-                self.error = None;
-                self.notify_status(format!(
-                    "{} {} applied to {}.",
-                    selected.label(),
-                    hex,
-                    target.label()
-                ));
-                true
-            }
-            Err(err) => {
-                self.palette.pending_apply = None;
-                self.notify_error(format!("{} color error: {err}", selected.label()));
-                false
-            }
-        }
-    }
-
     pub fn notify_status(&mut self, message: impl Into<String>) {
         self.status = Some(message.into());
         self.error = None;
@@ -429,7 +766,7 @@ mod tests {
     #[test]
     fn adjust_font_size_clamps_to_bounds() {
         let mut app = App::new();
-        assert_eq!(app.font_size_px, 12);
+        assert_eq!(app.font_size_px, 16);
 
         app.adjust_font_size(-200);
         assert_eq!(app.font_size_px, 6);

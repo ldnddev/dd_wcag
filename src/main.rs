@@ -1,39 +1,36 @@
-//! # dd_wcag - Phase 1: Basic Project Setup
-//!
-//! This is the minimal entry point for the TUI application.
-//! In Phase 1, we set up the terminal with Crossterm and Ratatui,
-//! create a basic event loop that quits on 'q', and render an empty frame.
+//! dd_wcag TUI entry point.
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-// Import modules
 mod app;
 mod color;
+mod contrast;
+mod layout;
 mod palette;
 mod theme;
 mod ui;
 mod web_preview;
 
-use app::{ActiveTab, App, InputTarget};
-use palette::{PaletteApplyTarget, PALETTE_EXPORT_PATH};
-use std::io::Write;
-use std::process::{Command, Stdio};
+use app::{App, FocusId, Mode, StylePreset};
+use layout::{char_index_at, Hit};
+use palette::PALETTE_EXPORT_PATH;
 use theme::Theme;
 
-// Main function
 fn main() -> Result<()> {
-    // Setup terminal
     let mut terminal = setup_terminal()?;
 
-    // Create app state
     let loaded_theme = Theme::load();
     let source = loaded_theme.source;
     let path = loaded_theme.path.clone();
@@ -52,12 +49,8 @@ fn main() -> Result<()> {
     }
     sync_web_preview(&mut app);
 
-    // Run the main loop
     let res = run_loop(&mut terminal, &mut app);
-
-    // Restore terminal
     restore_terminal(&mut terminal)?;
-
     res
 }
 
@@ -74,304 +67,498 @@ struct KeyEffects {
     open_preview: bool,
     save_palette: bool,
     copy_palette: bool,
+    copy_hex: bool,
 }
 
 fn try_apply_active_input(app: &mut App) -> bool {
+    if !app.focus.is_text_field() {
+        return true;
+    }
     app.sync_active_input();
     app.submit_input()
+}
+
+fn dispatch_effects(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+    effects: KeyEffects,
+) -> Result<bool> {
+    if effects.open_preview {
+        sync_web_preview(app);
+        match web_preview::open_in_browser() {
+            Ok(()) => app.notify_status("Opened web preview. Click toast to dismiss."),
+            Err(err) => app.notify_error(format!(
+                "Failed to open browser preview ({}): {err}",
+                web_preview::preview_path().display()
+            )),
+        }
+    }
+    if effects.save_palette {
+        save_palette_with_dialog(terminal, app)?;
+    }
+    if effects.copy_palette {
+        copy_palette(app);
+    }
+    if effects.copy_hex {
+        if let Some(hex) = app.copy_focused_hex() {
+            match copy_to_clipboard(&hex) {
+                Ok(()) => app.notify_status(format!("Copied {hex}")),
+                Err(err) => app.notify_error(format!("Clipboard unavailable: {err}")),
+            }
+        }
+    }
+    if effects.sync_preview {
+        sync_web_preview(app);
+    }
+    Ok(effects.quit)
 }
 
 fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     let mut effects = KeyEffects::default();
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
     if ctrl {
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => effects.quit = true,
-
             KeyCode::Char('b') | KeyCode::Char('B') => {
-                app.is_bold = !app.is_bold;
+                app.toggle_bold_preset();
                 effects.sync_preview = true;
             }
-
             KeyCode::Char('f') | KeyCode::Char('F') => {
+                app.fix_open = !app.fix_open;
+            }
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                app.set_mode(Mode::Palette);
+                app.generate_palette();
+                app.set_focus(FocusId::Detail);
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
                 app.cycle_font_family();
                 effects.sync_preview = true;
             }
-
-            KeyCode::Char('o') | KeyCode::Char('O') => {
-                effects.open_preview = true;
-            }
-
+            KeyCode::Char('o') | KeyCode::Char('O') => effects.open_preview = true,
             KeyCode::Char('s') | KeyCode::Char('S') => {
-                if app.active_tab == ActiveTab::Palette {
+                if app.mode == Mode::Palette {
                     effects.save_palette = true;
+                } else {
+                    app.cycle_style();
+                    effects.sync_preview = true;
                 }
             }
-
             KeyCode::Char('c') | KeyCode::Char('C') => {
-                if app.active_tab == ActiveTab::Palette {
+                if app.mode == Mode::Palette {
                     effects.copy_palette = true;
+                } else {
+                    effects.copy_hex = true;
                 }
             }
-
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                // Next Fix candidate (wired when Fix search lands).
+            }
             KeyCode::Up => {
-                if app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast {
-                    app.adjust_font_size(1);
-                    effects.sync_preview = true;
-                }
+                step_focused(app, true, shift, &mut effects);
             }
-
             KeyCode::Down => {
-                if app.active_tab == ActiveTab::Preview || app.active_tab == ActiveTab::Contrast {
-                    app.adjust_font_size(-1);
-                    effects.sync_preview = true;
-                }
+                step_focused(app, false, shift, &mut effects);
             }
-
             _ => {}
         }
-
         return effects;
     }
 
     match key.code {
-        KeyCode::Tab => match app.active_tab {
-            ActiveTab::Input => match app.input_target {
-                InputTarget::Foreground => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.set_input_target(InputTarget::Background);
-                }
-                InputTarget::Background => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.set_input_target(InputTarget::PreviewText);
-                }
-                InputTarget::PreviewText | InputTarget::None => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.set_input_target(InputTarget::FontFamily);
-                }
-                InputTarget::FontFamily => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.active_tab = ActiveTab::Conversions;
-                    app.set_input_target(InputTarget::None);
-                }
-            },
-            ActiveTab::Conversions => {
-                app.active_tab = ActiveTab::Contrast;
-            }
-            ActiveTab::Contrast => {
-                app.active_tab = ActiveTab::Preview;
-            }
-            ActiveTab::Preview => {
-                app.active_tab = ActiveTab::Palette;
-            }
-            ActiveTab::Palette => {
-                app.active_tab = ActiveTab::Input;
-                app.set_input_target(InputTarget::Foreground);
-            }
-        },
-
-        KeyCode::BackTab => match app.active_tab {
-            ActiveTab::Input => match app.input_target {
-                InputTarget::Background => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.set_input_target(InputTarget::Foreground);
-                }
-                InputTarget::PreviewText => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.set_input_target(InputTarget::Background);
-                }
-                InputTarget::FontFamily => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.set_input_target(InputTarget::PreviewText);
-                }
-                InputTarget::Foreground | InputTarget::None => {
-                    if !try_apply_active_input(app) {
-                        return effects;
-                    }
-                    effects.sync_preview = true;
-                    app.active_tab = ActiveTab::Palette;
-                    app.set_input_target(InputTarget::None);
-                }
-            },
-            ActiveTab::Conversions => {
-                app.active_tab = ActiveTab::Input;
-                app.set_input_target(InputTarget::Background);
-            }
-            ActiveTab::Contrast => {
-                app.active_tab = ActiveTab::Conversions;
-            }
-            ActiveTab::Preview => {
-                app.active_tab = ActiveTab::Contrast;
-            }
-            ActiveTab::Palette => {
-                app.active_tab = ActiveTab::Preview;
-            }
-        },
-
+        KeyCode::F(1) => {
+            app.show_keybindings = !app.show_keybindings;
+            app.show_theme_debug = false;
+        }
+        KeyCode::F(2) => {
+            app.show_theme_debug = !app.show_theme_debug;
+            app.show_keybindings = false;
+        }
         KeyCode::Esc => {
             if app.show_keybindings {
                 app.show_keybindings = false;
             } else if app.show_theme_debug {
                 app.show_theme_debug = false;
-            } else if app.active_tab == ActiveTab::Palette && app.palette.editing {
+            } else if app.fix_open {
+                app.fix_open = false;
+            } else if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.cancel_edit();
-            } else if app.active_tab == ActiveTab::Palette && app.palette.pending_apply.is_some() {
-                app.palette.pending_apply = None;
-                app.notify_status("Palette apply cancelled.");
-            } else {
-                effects.quit = true;
+            } else if app.editing && app.focus.is_text_field() {
+                app.editing = false;
             }
         }
-
-        KeyCode::Up => {
-            if app.active_tab == ActiveTab::Palette && !app.palette.editing {
-                if app.palette.generated.is_some() {
-                    app.palette.scroll_detail_up();
-                } else {
-                    app.palette.select_previous();
-                }
-            }
-        }
-
-        KeyCode::Down => {
-            if app.active_tab == ActiveTab::Palette && !app.palette.editing {
-                if app.palette.generated.is_some() {
-                    app.palette.scroll_detail_down();
-                } else {
-                    app.palette.select_next();
-                }
-            }
-        }
-
-        KeyCode::F(1) => {
-            app.show_keybindings = true;
-            app.show_theme_debug = false;
-        }
-
-        KeyCode::F(2) => {
-            app.show_theme_debug = true;
-            app.show_keybindings = false;
-        }
-
-        KeyCode::Char(c) => {
-            if app.active_tab == ActiveTab::Palette {
-                if app.palette.editing {
-                    app.palette.insert_char_at_cursor(c);
-                } else if c == 'g' || c == 'G' {
-                    if let Some(target) = app.palette.pending_apply {
-                        if app.apply_selected_palette_color(target) {
-                            effects.sync_preview = true;
-                        }
-                    } else {
-                        app.generate_palette();
-                    }
-                } else if c == 'f' || c == 'F' {
-                    app.palette.pending_apply = Some(PaletteApplyTarget::Foreground);
-                    app.notify_status("Press G to apply selected palette color to FG.");
-                } else if c == 'b' || c == 'B' {
-                    app.palette.pending_apply = Some(PaletteApplyTarget::Background);
-                    app.notify_status("Press G to apply selected palette color to BG.");
-                }
-            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
-                app.insert_char_at_cursor(c);
-                app.sync_active_input();
-                if app.input_target == InputTarget::PreviewText {
-                    effects.sync_preview = true;
-                }
-            }
-        }
-
-        KeyCode::Backspace => {
-            if app.active_tab == ActiveTab::Palette && app.palette.editing {
-                app.palette.backspace_at_cursor();
-            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
-                app.backspace_at_cursor();
-                app.sync_active_input();
-                if app.input_target == InputTarget::PreviewText {
-                    effects.sync_preview = true;
-                }
-            }
-        }
-
-        KeyCode::Enter => {
-            if app.active_tab == ActiveTab::Palette {
-                if app.palette.editing {
-                    app.palette.commit_edit();
-                } else {
-                    app.palette.begin_edit();
-                }
-            } else if app.active_tab == ActiveTab::Input
-                && app.input_target == InputTarget::PreviewText
-            {
-                app.insert_newline_at_cursor();
-                app.sync_active_input();
+        KeyCode::Char('1') if !app.editing => app.set_mode(Mode::Contrast),
+        KeyCode::Char('2') if !app.editing => app.set_mode(Mode::Palette),
+        KeyCode::Tab => {
+            if try_apply_active_input(app) {
                 effects.sync_preview = true;
+                app.cycle_focus(false);
             }
         }
-
+        KeyCode::BackTab => {
+            if try_apply_active_input(app) {
+                effects.sync_preview = true;
+                app.cycle_focus(true);
+            }
+        }
         KeyCode::Left => {
-            if app.active_tab == ActiveTab::Palette && app.palette.editing {
+            if app.focus == FocusId::Style {
+                app.move_style_chip(-1);
+                effects.sync_preview = true;
+            } else if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.move_cursor_left();
-            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+            } else if app.focus.is_text_field() {
                 app.move_cursor_left();
             }
         }
-
         KeyCode::Right => {
-            if app.active_tab == ActiveTab::Palette && app.palette.editing {
+            if app.focus == FocusId::Style {
+                app.move_style_chip(1);
+                effects.sync_preview = true;
+            } else if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.move_cursor_right();
-            } else if app.active_tab == ActiveTab::Input && app.input_target != InputTarget::None {
+            } else if app.focus.is_text_field() {
                 app.move_cursor_right();
             }
         }
-
+        KeyCode::Enter => {
+            if app.mode == Mode::Palette {
+                if app.palette.editing {
+                    app.palette.commit_edit();
+                } else if matches!(app.focus, FocusId::Role(_)) || app.focus == FocusId::Generate {
+                    if app.focus == FocusId::Generate {
+                        app.generate_palette();
+                        app.set_focus(FocusId::Detail);
+                    } else {
+                        app.palette.begin_edit();
+                    }
+                } else {
+                    app.palette.begin_edit();
+                }
+            } else if app.focus == FocusId::PreviewText {
+                app.insert_newline_at_cursor();
+                app.sync_active_input();
+                effects.sync_preview = true;
+            } else if app.focus == FocusId::Swap {
+                app.swap_colors();
+                effects.sync_preview = true;
+            } else if app.focus == FocusId::CopyHex {
+                effects.copy_hex = true;
+            } else if app.focus == FocusId::FixBtn {
+                app.fix_open = !app.fix_open;
+            } else if app.focus == FocusId::OpenPreview {
+                effects.open_preview = true;
+            } else if app.focus == FocusId::Style {
+                app.apply_style_preset(StylePreset::from_index(app.style_chip));
+                effects.sync_preview = true;
+            } else if app.focus.is_text_field() {
+                let _ = try_apply_active_input(app);
+                effects.sync_preview = true;
+            }
+        }
+        KeyCode::Backspace => {
+            if app.mode == Mode::Palette && app.palette.editing {
+                app.palette.backspace_at_cursor();
+            } else if app.focus.is_text_field() {
+                app.backspace_at_cursor();
+                app.sync_active_input();
+                if app.focus == FocusId::PreviewText {
+                    effects.sync_preview = true;
+                }
+            }
+        }
+        KeyCode::Up => {
+            if app.focus == FocusId::Size || app.focus == FocusId::Weight {
+                step_focused(app, true, shift, &mut effects);
+            } else if app.focus == FocusId::Style {
+                app.move_style_chip(-1);
+                effects.sync_preview = true;
+            } else if app.focus == FocusId::Detail {
+                app.palette.scroll_detail_by(if shift { -8 } else { -1 });
+            } else if app.mode == Mode::Palette && !app.palette.editing {
+                app.palette.select_previous();
+                if let FocusId::Role(_) = app.focus {
+                    app.set_focus(FocusId::Role(app.palette.selected_idx));
+                }
+            }
+        }
+        KeyCode::Down => {
+            if app.focus == FocusId::Size || app.focus == FocusId::Weight {
+                step_focused(app, false, shift, &mut effects);
+            } else if app.focus == FocusId::Style {
+                app.move_style_chip(1);
+                effects.sync_preview = true;
+            } else if app.focus == FocusId::Detail {
+                app.palette.scroll_detail_by(if shift { 8 } else { 1 });
+            } else if app.mode == Mode::Palette && !app.palette.editing {
+                app.palette.select_next();
+                if let FocusId::Role(_) = app.focus {
+                    app.set_focus(FocusId::Role(app.palette.selected_idx));
+                }
+            }
+        }
+        KeyCode::PageUp => {
+            if app.mode == Mode::Palette {
+                app.set_focus(FocusId::Detail);
+                app.palette.scroll_detail_by(-10);
+            }
+        }
+        KeyCode::PageDown => {
+            if app.mode == Mode::Palette {
+                app.set_focus(FocusId::Detail);
+                app.palette.scroll_detail_by(10);
+            }
+        }
+        KeyCode::Char(' ') if !app.editing && app.mode == Mode::Contrast => {
+            if app.focus == FocusId::Style {
+                app.apply_style_preset(StylePreset::from_index(app.style_chip));
+                effects.sync_preview = true;
+            } else {
+                app.swap_colors();
+                effects.sync_preview = true;
+            }
+        }
+        KeyCode::Char(c) => {
+            if app.show_keybindings || app.show_theme_debug {
+                return effects;
+            }
+            if app.mode == Mode::Palette && app.palette.editing {
+                app.palette.insert_char_at_cursor(c);
+                return effects;
+            }
+            if app.editing && app.focus.is_text_field() {
+                app.insert_char_at_cursor(c);
+                app.sync_active_input();
+                if app.focus == FocusId::PreviewText {
+                    effects.sync_preview = true;
+                }
+            }
+        }
         _ => {}
     }
 
     effects
 }
 
-// Setup terminal (unchanged)
+fn step_focused(app: &mut App, up: bool, shift: bool, effects: &mut KeyEffects) {
+    let sign = if up { 1 } else { -1 };
+    match app.focus {
+        FocusId::Size => {
+            let delta = if shift { 4 } else { 1 };
+            app.adjust_font_size(sign * delta);
+            effects.sync_preview = true;
+        }
+        FocusId::Weight => {
+            let delta = if shift { 200 } else { 100 };
+            app.adjust_weight(sign * delta);
+            effects.sync_preview = true;
+        }
+        FocusId::Style => {
+            app.move_style_chip(sign);
+            effects.sync_preview = true;
+        }
+        FocusId::Detail => {
+            let step = if shift { 8 } else { 3 };
+            app.palette.scroll_detail_by(i32::from(sign) * step);
+        }
+        _ => {}
+    }
+}
+
+fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
+    let mut effects = KeyEffects::default();
+    let (col, row) = (mouse.column, mouse.row);
+
+    match mouse.kind {
+        MouseEventKind::Moved => {
+            app.mouse_pos = Some((col, row));
+            app.hovered = app.layout.hit(col, row);
+        }
+        MouseEventKind::Up(_) => {
+            app.scrollbar_dragging = false;
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+            let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+            if let Some(hit) = app.layout.hit(col, row) {
+                match hit {
+                    Hit::SizeInput | Hit::SizeDec | Hit::SizeInc => {
+                        app.set_focus(FocusId::Size);
+                        step_focused(app, up, shift, &mut effects);
+                    }
+                    Hit::WeightInput | Hit::WeightDec | Hit::WeightInc => {
+                        app.set_focus(FocusId::Weight);
+                        step_focused(app, up, shift, &mut effects);
+                    }
+                    Hit::Detail | Hit::DetailScrollbar | Hit::PairList => {
+                        app.set_focus(FocusId::Detail);
+                        let step = if shift { 8 } else { 3 };
+                        app.palette.scroll_detail_by(if up { -step } else { step });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            let now = Instant::now();
+            let is_double = app.last_mouse_click_pos.is_some_and(|(lx, ly, lt)| {
+                lx == col && ly == row && now.duration_since(lt).as_millis() < 420
+            });
+            app.last_mouse_click_pos = Some((col, row, now));
+
+            let Some(hit) = app.layout.hit(col, row) else {
+                return effects;
+            };
+            match hit {
+                Hit::Toast => app.clear_notification(),
+                Hit::Popup => {}
+                Hit::PopupOutside => {
+                    app.show_keybindings = false;
+                    app.show_theme_debug = false;
+                }
+                Hit::TabContrast => {
+                    if try_apply_active_input(app) {
+                        app.set_mode(Mode::Contrast);
+                        effects.sync_preview = true;
+                    }
+                }
+                Hit::TabPalette => {
+                    if try_apply_active_input(app) {
+                        app.set_mode(Mode::Palette);
+                        effects.sync_preview = true;
+                    }
+                }
+                Hit::TargetWcag => {
+                    app.targets.wcag = app.targets.wcag.cycle();
+                    app.set_focus(FocusId::TargetWcag);
+                }
+                Hit::TargetApca => {
+                    app.targets.apca = app.targets.apca.cycle();
+                    app.set_focus(FocusId::TargetApca);
+                }
+                Hit::FgInput | Hit::FgSwatch => {
+                    if try_apply_active_input(app) {
+                        app.set_focus(FocusId::FgHex);
+                        if matches!(hit, Hit::FgInput) {
+                            app.cursor_char_idx =
+                                char_index_at(app.layout.fg_input, col, app.current_input.chars().count());
+                        }
+                    }
+                }
+                Hit::BgInput | Hit::BgSwatch => {
+                    if try_apply_active_input(app) {
+                        app.set_focus(FocusId::BgHex);
+                        if matches!(hit, Hit::BgInput) {
+                            app.cursor_char_idx =
+                                char_index_at(app.layout.bg_input, col, app.current_input.chars().count());
+                        }
+                    }
+                }
+                Hit::PreviewText => {
+                    if try_apply_active_input(app) {
+                        app.set_focus(FocusId::PreviewText);
+                        app.cursor_char_idx = char_index_at(
+                            app.layout.preview_text,
+                            col,
+                            app.current_input.chars().count(),
+                        );
+                    }
+                }
+                Hit::FontFamily => {
+                    if try_apply_active_input(app) {
+                        app.set_focus(FocusId::FontFamily);
+                        app.cursor_char_idx = char_index_at(
+                            app.layout.font_family,
+                            col,
+                            app.current_input.chars().count(),
+                        );
+                    }
+                }
+                Hit::SizeInput | Hit::SizeDec | Hit::SizeInc => {
+                    app.set_focus(FocusId::Size);
+                    if matches!(hit, Hit::SizeInc) {
+                        step_focused(app, true, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                    } else if matches!(hit, Hit::SizeDec) {
+                        step_focused(app, false, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                    }
+                }
+                Hit::WeightInput | Hit::WeightDec | Hit::WeightInc => {
+                    app.set_focus(FocusId::Weight);
+                    if matches!(hit, Hit::WeightInc) {
+                        step_focused(app, true, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                    } else if matches!(hit, Hit::WeightDec) {
+                        step_focused(app, false, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                    }
+                }
+                Hit::Style(i) => {
+                    app.apply_style_preset(StylePreset::from_index(i));
+                    app.set_focus(FocusId::Style);
+                    effects.sync_preview = true;
+                }
+                Hit::Swap => {
+                    app.swap_colors();
+                    app.set_focus(FocusId::Swap);
+                    effects.sync_preview = true;
+                }
+                Hit::Copy => {
+                    app.set_focus(FocusId::CopyHex);
+                    effects.copy_hex = true;
+                }
+                Hit::FixBtn => {
+                    app.fix_open = !app.fix_open;
+                    app.set_focus(FocusId::FixBtn);
+                }
+                Hit::WebBtn => {
+                    app.set_focus(FocusId::OpenPreview);
+                    effects.open_preview = true;
+                }
+                Hit::Role(i) => {
+                    if try_apply_active_input(app) {
+                        app.palette.selected_idx = i.min(3);
+                        app.set_focus(FocusId::Role(app.palette.selected_idx));
+                        if is_double {
+                            app.palette.begin_edit();
+                        }
+                    }
+                }
+                Hit::Generate => {
+                    app.generate_palette();
+                    app.set_focus(FocusId::Detail);
+                }
+                Hit::Detail | Hit::DetailScrollbar => {
+                    app.set_focus(FocusId::Detail);
+                }
+                Hit::FixOutside | Hit::CloseFix => app.fix_open = false,
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    effects
+}
+
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
-
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     Terminal::new(backend).map_err(Into::into)
 }
 
-// Restore terminal (unchanged)
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
 }
 
-// Main event loop with key handling (add tab switching)
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
@@ -383,33 +570,21 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::ZERO);
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                let effects = handle_key_event(app, key);
-
-                if effects.open_preview {
-                    if let Err(err) = web_preview::open_in_browser() {
-                        app.notify_error(format!(
-                            "Failed to open browser preview ({}): {err}",
-                            web_preview::preview_path().display()
-                        ));
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    let effects = handle_key_event(app, key);
+                    if dispatch_effects(terminal, app, effects)? {
+                        return Ok(());
                     }
                 }
-
-                if effects.save_palette {
-                    save_palette(app);
+                Event::Mouse(mouse) => {
+                    let effects = handle_mouse_event(app, mouse);
+                    if dispatch_effects(terminal, app, effects)? {
+                        return Ok(());
+                    }
                 }
-
-                if effects.copy_palette {
-                    copy_palette(app);
-                }
-
-                if effects.sync_preview {
-                    sync_web_preview(app);
-                }
-
-                if effects.quit {
-                    return Ok(());
-                }
+                Event::Resize(_, _) => {}
+                _ => {}
             }
         }
 
@@ -420,20 +595,35 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
     }
 }
 
-fn save_palette(app: &mut App) {
-    match app.prepare_palette_export("saving") {
-        Ok(scss) => match std::fs::write(PALETTE_EXPORT_PATH, scss) {
-            Ok(()) => {
-                app.notify_status(format!("Palette saved to ./{PALETTE_EXPORT_PATH}."));
-            }
-            Err(err) => {
-                app.notify_error(format!("Failed to save {PALETTE_EXPORT_PATH}: {err}"));
-            }
-        },
+fn save_palette_with_dialog(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    let scss = match app.prepare_palette_export("saving") {
+        Ok(scss) => scss,
         Err(err) => {
             app.notify_error(err);
+            return Ok(());
         }
+    };
+
+    restore_terminal(terminal)?;
+    let chosen = rfd::FileDialog::new()
+        .set_title("Save palette")
+        .set_file_name(PALETTE_EXPORT_PATH)
+        .add_filter("SCSS", &["scss", "css"])
+        .save_file();
+    *terminal = setup_terminal()?;
+    terminal.clear()?;
+
+    match chosen {
+        Some(path) => match std::fs::write(&path, scss) {
+            Ok(()) => app.notify_status(format!("Palette saved to {}.", path.display())),
+            Err(err) => app.notify_error(format!("Failed to save {}: {err}", path.display())),
+        },
+        None => app.notify_status("Save cancelled."),
     }
+    Ok(())
 }
 
 fn copy_palette(app: &mut App) {
@@ -526,14 +716,13 @@ mod tests {
     #[test]
     fn tab_auto_applies_foreground_and_moves_focus() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Input;
-        app.set_input_target(InputTarget::Foreground);
+        app.set_focus(FocusId::FgHex);
         app.current_input = "#00ff00".to_string();
 
         let effects = handle_key_event(&mut app, key(KeyCode::Tab, KeyModifiers::NONE));
 
         assert_eq!(app.foreground.to_hex(), "#00ff00");
-        assert_eq!(app.input_target, InputTarget::Background);
+        assert_eq!(app.focus, FocusId::BgHex);
         assert!(effects.sync_preview);
         assert!(!effects.quit);
     }
@@ -541,63 +730,66 @@ mod tests {
     #[test]
     fn tab_with_invalid_input_keeps_focus_and_sets_error() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Input;
-        app.set_input_target(InputTarget::Foreground);
+        app.set_focus(FocusId::FgHex);
         app.current_input = "#zzzzzz".to_string();
 
         let effects = handle_key_event(&mut app, key(KeyCode::Tab, KeyModifiers::NONE));
 
-        assert_eq!(app.input_target, InputTarget::Foreground);
+        assert_eq!(app.focus, FocusId::FgHex);
         assert!(app.error.is_some());
         assert!(!effects.sync_preview);
     }
 
     #[test]
-    fn ctrl_up_down_adjusts_size_with_expected_direction_and_bounds() {
+    fn ctrl_up_down_steps_focused_size() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Preview;
-        app.font_size_px = 12;
+        app.set_focus(FocusId::Size);
+        app.font_size_px = 16;
 
         handle_key_event(&mut app, key(KeyCode::Up, KeyModifiers::CONTROL));
-        assert_eq!(app.font_size_px, 13);
+        assert_eq!(app.font_size_px, 17);
 
         handle_key_event(&mut app, key(KeyCode::Down, KeyModifiers::CONTROL));
-        assert_eq!(app.font_size_px, 12);
+        assert_eq!(app.font_size_px, 16);
 
-        app.font_size_px = 120;
+        app.set_focus(FocusId::FgHex);
         handle_key_event(&mut app, key(KeyCode::Up, KeyModifiers::CONTROL));
-        assert_eq!(app.font_size_px, 120);
-
-        app.font_size_px = 6;
-        handle_key_event(&mut app, key(KeyCode::Down, KeyModifiers::CONTROL));
-        assert_eq!(app.font_size_px, 6);
+        assert_eq!(app.font_size_px, 16);
     }
 
     #[test]
-    fn esc_quits_when_error_toast_is_visible() {
+    fn ctrl_up_down_steps_focused_weight() {
+        let mut app = App::new();
+        app.set_focus(FocusId::Weight);
+        handle_key_event(&mut app, key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_eq!(app.weight, 500);
+        handle_key_event(&mut app, key(KeyCode::Down, KeyModifiers::CONTROL));
+        assert_eq!(app.weight, 400);
+    }
+
+    #[test]
+    fn esc_does_not_quit() {
         let mut app = App::new();
         app.notify_error("error");
-
-        let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        let effects = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!effects.quit);
         assert!(app.error.is_some());
-        assert!(quit.quit);
     }
 
     #[test]
-    fn esc_quits_when_status_toast_is_visible() {
+    fn ctrl_q_quits() {
         let mut app = App::new();
-        app.notify_status("status");
-
-        let quit = handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(app.status.is_some());
-        assert!(quit.quit);
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(effects.quit);
     }
 
     #[test]
-    fn f1_opens_keybindings_popup() {
+    fn f1_toggles_help() {
         let mut app = App::new();
         handle_key_event(&mut app, key(KeyCode::F(1), KeyModifiers::NONE));
         assert!(app.show_keybindings);
+        handle_key_event(&mut app, key(KeyCode::F(1), KeyModifiers::NONE));
+        assert!(!app.show_keybindings);
     }
 
     #[test]
@@ -608,19 +800,53 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_cycles_font_family() {
+    fn keys_1_and_2_switch_mode() {
         let mut app = App::new();
-        let start = app.preview_font_family.clone();
-        let effects = handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
-        assert_ne!(app.preview_font_family, start);
-        assert!(effects.sync_preview);
+        app.set_focus(FocusId::Swap);
+        handle_key_event(&mut app, key(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Palette);
+        app.set_focus(FocusId::Generate);
+        handle_key_event(&mut app, key(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Contrast);
+    }
+
+    #[test]
+    fn arrows_select_style_chips_when_style_is_focused() {
+        let mut app = App::new();
+        app.set_focus(FocusId::Style);
+        assert_eq!(app.style_chip, 0);
+
+        handle_key_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.weight, 700);
+        assert!(!app.italic);
+        assert_eq!(app.style_chip, 1);
+
+        handle_key_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.weight, 400);
+        assert!(app.italic);
+        assert_eq!(app.style_chip, 2);
+
+        handle_key_event(&mut app, key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.weight, 700);
+        assert!(!app.italic);
+    }
+
+    #[test]
+    fn space_swaps_colors_when_not_editing() {
+        let mut app = App::new();
+        app.editing = false;
+        app.set_focus(FocusId::Swap);
+        app.foreground_input = "#000000".to_string();
+        app.background_input = "#ffffff".to_string();
+        let fg = app.foreground;
+        handle_key_event(&mut app, key(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(app.background, fg);
     }
 
     #[test]
     fn enter_in_preview_text_adds_newline_and_syncs_preview() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Input;
-        app.set_input_target(InputTarget::PreviewText);
+        app.set_focus(FocusId::PreviewText);
         app.current_input = "Line 1".to_string();
         app.cursor_char_idx = app.current_input.chars().count();
 
@@ -632,123 +858,80 @@ mod tests {
     }
 
     #[test]
-    fn left_right_move_cursor_and_char_inserts_at_cursor() {
-        let mut app = App::new();
-        app.active_tab = ActiveTab::Input;
-        app.set_input_target(InputTarget::PreviewText);
-        app.current_input = "ab".to_string();
-        app.cursor_char_idx = 2;
-
-        handle_key_event(&mut app, key(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(app.cursor_char_idx, 1);
-
-        handle_key_event(&mut app, key(KeyCode::Char('X'), KeyModifiers::NONE));
-        assert_eq!(app.current_input, "aXb");
-        assert_eq!(app.cursor_char_idx, 2);
-
-        handle_key_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
-        assert_eq!(app.cursor_char_idx, 3);
-    }
-
-    #[test]
-    fn tab_cycle_includes_palette_tab() {
-        let mut app = App::new();
-        app.active_tab = ActiveTab::Preview;
-
-        handle_key_event(&mut app, key(KeyCode::Tab, KeyModifiers::NONE));
-
-        assert_eq!(app.active_tab, ActiveTab::Palette);
-    }
-
-    #[test]
-    fn backtab_from_foreground_moves_to_palette_tab() {
-        let mut app = App::new();
-        app.active_tab = ActiveTab::Input;
-        app.set_input_target(InputTarget::Foreground);
-
-        handle_key_event(&mut app, key(KeyCode::BackTab, KeyModifiers::SHIFT));
-
-        assert_eq!(app.active_tab, ActiveTab::Palette);
-        assert_eq!(app.input_target, InputTarget::None);
-    }
-
-    #[test]
-    fn palette_enter_edits_and_commits_selected_color() {
-        let mut app = App::new();
-        app.active_tab = ActiveTab::Palette;
-
-        handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(app.palette.editing);
-
-        app.palette.edit_input = "#000000".to_string();
-        app.palette.edit_cursor_char_idx = app.palette.edit_input.chars().count();
-        handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert!(!app.palette.editing);
-        assert_eq!(app.palette.primary_input, "#000000");
-    }
-
-    #[test]
     fn palette_g_generates_scss() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Palette;
-
-        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
-
+        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, Mode::Palette);
         assert!(app.palette.generated.is_some());
-        assert!(app.error.is_none());
+        assert_eq!(app.focus, FocusId::Detail);
     }
 
     #[test]
-    fn palette_fg_sequence_applies_selected_color_to_foreground() {
+    fn generated_detail_scrolls_with_arrows() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Palette;
-        app.palette.primary_input = "#123456".to_string();
-
-        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::NONE));
-        let effects = handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
-
-        assert_eq!(app.foreground.to_hex(), "#123456");
-        assert_eq!(app.foreground_input, "#123456");
-        assert!(effects.sync_preview);
-    }
-
-    #[test]
-    fn palette_bg_sequence_applies_selected_color_to_background() {
-        let mut app = App::new();
-        app.active_tab = ActiveTab::Palette;
-        app.palette.primary_input = "#abcdef".to_string();
-
-        handle_key_event(&mut app, key(KeyCode::Char('b'), KeyModifiers::NONE));
-        let effects = handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
-
-        assert_eq!(app.background.to_hex(), "#abcdef");
-        assert_eq!(app.background_input, "#abcdef");
-        assert!(effects.sync_preview);
-    }
-
-    #[test]
-    fn palette_up_down_scroll_generated_detail() {
-        let mut app = App::new();
-        app.active_tab = ActiveTab::Palette;
-        app.generate_palette();
-
+        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.palette.detail_max_scroll = 20;
         handle_key_event(&mut app, key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.palette.detail_scroll, 1);
-
+        handle_key_event(&mut app, key(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.palette.detail_scroll, 11);
         handle_key_event(&mut app, key(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(app.palette.detail_scroll, 0);
+        assert_eq!(app.palette.detail_scroll, 10);
+    }
+
+    #[test]
+    fn bare_g_types_into_a_focused_color_field() {
+        let mut app = App::new();
+        app.set_focus(FocusId::FgHex);
+        app.current_input = "#00".to_string();
+        app.cursor_char_idx = 3;
+        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(app.current_input.contains('g'));
+        assert!(app.palette.generated.is_none());
+    }
+
+    #[test]
+    fn ctrl_g_generates_even_when_a_color_field_is_focused() {
+        let mut app = App::new();
+        app.set_focus(FocusId::FgHex);
+        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, Mode::Palette);
+        assert!(app.palette.generated.is_some());
+    }
+
+    #[test]
+    fn ctrl_f_toggles_fix() {
+        let mut app = App::new();
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(app.fix_open);
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(!app.fix_open);
     }
 
     #[test]
     fn ctrl_s_and_ctrl_c_set_palette_effects() {
         let mut app = App::new();
-        app.active_tab = ActiveTab::Palette;
-
+        app.set_mode(Mode::Palette);
         let save = handle_key_event(&mut app, key(KeyCode::Char('s'), KeyModifiers::CONTROL));
         let copy = handle_key_event(&mut app, key(KeyCode::Char('c'), KeyModifiers::CONTROL));
-
         assert!(save.save_palette);
         assert!(copy.copy_palette);
+    }
+
+    #[test]
+    fn mouse_click_switches_tabs() {
+        let mut app = App::new();
+        app.layout.tabs_palette.x = 10;
+        app.layout.tabs_palette.y = 1;
+        app.layout.tabs_palette.width = 8;
+        app.layout.tabs_palette.height = 1;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 12,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_event(&mut app, mouse);
+        assert_eq!(app.mode, Mode::Palette);
     }
 }

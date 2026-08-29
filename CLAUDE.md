@@ -39,11 +39,11 @@ Tests live in `#[cfg(test)] mod tests` blocks alongside the code in `main.rs`, `
 Five tabs: `Input | Conversions | Contrast | Preview | Palette`. `Tab`/`Shift+Tab` cycles tabs and, while inside `Input`, cycles `InputTarget` (`Foreground → Background → PreviewText → FontFamily`) auto-applying the current draft. Invalid input on auto-apply blocks focus movement and surfaces a toast.
 
 ### Palette tab — derived from product spec
-`UI-THEME-BUILDER.md` is the product spec for the Palette tab and is **load-bearing**. When changing palette code:
+`SPEC.md` is the product spec (layout, mouse, keyboard, and palette export). When changing palette code:
 - Required base inputs: `Primary`, `Secondary`, `Tertiary`. Optional: `Support`. Fixed text tokens must never be modified by generation.
 - Generated SCSS must use `rgba(r, g, b, 1)` and preserve the variable group order documented in the spec (Primary, Secondary, Tertiary, Primary Action, Secondary Action, Tertiary Action, Semantic, Text Roles, Neutrals, Support/Utility).
 - Export (`Ctrl+S`) and clipboard (`Ctrl+C`) share the same SCSS payload via `App::prepare_palette_export` and are **gated on WCAG compliance** — see `validate_export` in `palette.rs`. Disabled-state failures are advisory; non-disabled action text/surface and border/focus failures block export.
-- Keys: `G` generates; `F` then `G` pushes selected color to FG preview; `B` then `G` pushes to BG preview; `Up`/`Down` selects inputs before generation, scrolls detail panel after.
+- Keys: `Ctrl+G` generates; `Ctrl+F` toggles Fix. Bare letters type into focused fields. Palette does not push colors to Contrast FG/BG (those fields are not visible on the Palette tab).
 
 ### Theming (cross-app standard)
 Themes are loaded in this order, first hit wins:
@@ -60,6 +60,6 @@ Status and error feedback render as bottom-right toasts (`TOAST_TTL = 5s`, expir
 `Ctrl+O` opens `/tmp/dd_wcag_preview.html`. The file is rewritten on every `sync_preview` effect — it is the only path that renders true CSS pixel font sizes (TUI cannot). Web preview includes WCAG and APCA info in the meta block.
 
 ## Reference docs in repo
+- `SPEC.md` — single app product spec (layout, mouse, keyboard, contrast math, palette generation/export). Authoritative for the `layout-mouse` rewrite. Current `src/` may still be the five-tab app until that branch lands.
 - `README.md` — user-facing keybindings, manual test checklist, and the architecture section (tech stack, module layout, key-handler pattern, runtime state, contrast logic, test coverage).
-- `UI-THEME-BUILDER.md` — Palette tab product spec; authoritative for naming/grouping/compliance rules of generated `_palette.scss`.
 - `THEME_STRUCTURE_STANDARD.md` — shared theme schema across ldnddev TUIs.

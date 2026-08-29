@@ -58,16 +58,16 @@ The installer:
 - `Left` / `Right`: move cursor in active input field
 - `Ctrl+Up` / `Ctrl+Down`: increase/decrease font size (`6..=120`)
 - `Ctrl+B`: toggle bold
-- `G`: generate palette when focused on the Palette tab
+- `Ctrl+G`: generate the full palette (`_palette.scss`)
+- `Ctrl+F`: toggle the Fix pane
+- `Ctrl+T`: cycle font-family presets
+- `Ctrl+S`: Contrast cycles style chips; Palette saves `./_palette.scss`
+- `Ctrl+C`: Contrast copies focused hex; Palette copies generated SCSS
 - `Up` / `Down`: select Palette inputs before generation, scroll generated output after generation
-- `F` then `G`: apply selected Palette color to foreground preview
-- `B` then `G`: apply selected Palette color to background preview
-- `Ctrl+S`: save generated palette to `./_palette.scss`
-- `Ctrl+C`: copy generated palette values to the system clipboard when available
 - `F1`: open keybindings popup
 - `F2`: open theme debug popup
 - `Ctrl+O`: open web preview (`/tmp/dd_wcag_preview.html`)
-- `Esc`: cancel active Palette edit/apply flow or quit
+- `Esc`: blur edit / close Fix or help (does not quit)
 - `Ctrl+Q`: quit
 
 Non-interactive status and error messages appear as bottom-right toasts and close automatically after 5 seconds.
@@ -76,7 +76,7 @@ Non-interactive status and error messages appear as bottom-right toasts and clos
 - Required base colors: `Primary`, `Secondary`, and `Tertiary`
 - Optional base color: `Support`
 - Text colors are fixed and are not changed by palette generation
-- Press `G` to generate the palette and WCAG compliance checks
+- Press `Ctrl+G` to generate the palette and WCAG compliance checks
 - Generated variables and compliance checks appear in a scrollable detail panel
 - A visible scrollbar appears when the generated detail panel has overflow content
 - `Ctrl+S` writes the generated palette to `./_palette.scss`

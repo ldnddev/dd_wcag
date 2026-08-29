@@ -369,6 +369,14 @@ impl Theme {
         color_or_reset(&self.scrollbar)
     }
 
+    pub fn scrollbar_hover_color(&self) -> Color {
+        color_or_reset(&self.scrollbar_hover)
+    }
+
+    pub fn warning_color(&self) -> Color {
+        color_or_reset(&self.warning)
+    }
+
     pub fn input_border_default_color(&self) -> Color {
         color_or_reset(&self.input_border_default)
     }

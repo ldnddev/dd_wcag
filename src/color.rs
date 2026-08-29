@@ -113,6 +113,14 @@ impl Color {
         0.2126 * lin.red as f64 + 0.7152 * lin.green as f64 + 0.0722 * lin.blue as f64
     }
 
+    pub fn rgb_u8(&self) -> (u8, u8, u8) {
+        (
+            (self.0.red * 255.0) as u8,
+            (self.0.green * 255.0) as u8,
+            (self.0.blue * 255.0) as u8,
+        )
+    }
+
     pub fn contrast_ratio(&self, other: &Color) -> f64 {
         let l1 = self.luminance();
         let l2 = other.luminance();
@@ -233,6 +241,45 @@ impl Color {
             (self.0.green * 255.0) as u8,
             (self.0.blue * 255.0) as u8,
         )
+    }
+}
+
+pub fn is_large_text(size_px: u16, weight: u16) -> bool {
+    size_px >= 18 || (size_px >= 14 && weight >= 700)
+}
+
+/// Advisory APCA |Lc| for a size/weight pair. Official pass/fail uses the header bar.
+pub fn apca_lookup_lc(size_px: u16, weight: u16) -> f64 {
+    let bold = weight >= 700;
+    match size_px {
+        0..=12 => {
+            if bold {
+                75.0
+            } else {
+                90.0
+            }
+        }
+        13..=18 => {
+            if bold {
+                60.0
+            } else {
+                75.0
+            }
+        }
+        19..=24 => {
+            if bold {
+                45.0
+            } else {
+                60.0
+            }
+        }
+        _ => {
+            if bold {
+                30.0
+            } else {
+                45.0
+            }
+        }
     }
 }
 

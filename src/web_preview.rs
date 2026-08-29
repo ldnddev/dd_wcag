@@ -1,7 +1,7 @@
 use crate::app::App;
 use std::io;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const PREVIEW_PATH: &str = "/tmp/dd_wcag_preview.html";
 
@@ -101,17 +101,15 @@ pub fn open_in_browser() -> io::Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open").arg(path_str.as_ref()).spawn()?;
+        spawn_detached("xdg-open", &[path_str.as_ref()])?;
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(path_str.as_ref()).spawn()?;
+        spawn_detached("open", &[path_str.as_ref()])?;
     }
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", path_str.as_ref()])
-            .spawn()?;
+        spawn_detached("cmd", &["/C", "start", path_str.as_ref()])?;
     }
 
     Ok(())
@@ -119,6 +117,16 @@ pub fn open_in_browser() -> io::Result<()> {
 
 pub fn preview_path() -> PathBuf {
     PathBuf::from(PREVIEW_PATH)
+}
+
+fn spawn_detached(program: &str, args: &[&str]) -> io::Result<()> {
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
 }
 
 fn escape_html(text: &str) -> String {
