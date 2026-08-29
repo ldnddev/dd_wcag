@@ -462,8 +462,13 @@ fn paint_input(buf: &mut Buffer, app: &App, area: Rect, text: &str, focused: boo
     if focused && app.editing {
         paint(
             buf,
-            Paragraph::new(caret_line(text, app.cursor_char_idx, style, caret_style(app)))
-                .style(style),
+            Paragraph::new(caret_line(
+                text,
+                app.cursor_char_idx,
+                style,
+                caret_style(app),
+            ))
+            .style(style),
             area,
         );
     } else {

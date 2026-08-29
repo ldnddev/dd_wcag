@@ -1,5 +1,6 @@
 use crate::app::{App, FocusId, Mode};
 use crate::contrast::render_contrast;
+use crate::fix::PairVerdict;
 use crate::layout::{
     LayoutMap, breakpoint, caret_line, centered, split_body_with_fix, split_header, split_shell,
 };
@@ -33,11 +34,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     map.target_apca = header.target_apca;
     render_header(frame, app, shell.header, &map);
 
-    let (main, fix) = split_body_with_fix(shell.body, map.breakpoint, app.fix_open);
-    if let Some(fix_area) = fix {
-        map.fix_area = fix_area;
-        render_fix_placeholder(frame, app, fix_area);
-    }
+    let (main, fix_strip) = split_body_with_fix(shell.body, map.breakpoint, app.fix_open);
 
     match app.mode {
         Mode::Contrast => {
@@ -80,6 +77,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             map.detail_scrollbar = scrollbar;
             map.role_rows = roles;
         }
+    }
+
+    if let Some(fix_area) = fix_strip {
+        render_fix(frame, app, fix_area, &mut map, false);
+    } else if app.fix_open {
+        let overlay = centered(shell.body, 80, 55);
+        frame.render_widget(Clear, overlay);
+        render_fix(frame, app, overlay, &mut map, true);
     }
 
     render_footer(frame, app, shell.footer);
@@ -177,23 +182,205 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_fix_placeholder(frame: &mut Frame, app: &App, area: Rect) {
+fn render_fix(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap, overlay: bool) {
+    map.fix_area = area;
+    let border = if overlay {
+        app.theme.border_active_color()
+    } else {
+        app.theme.border_default_color()
+    };
     frame.render_widget(
-        Paragraph::new("Fix pane — apply a nearby passing candidate (coming next). Esc closes.")
-            .style(
-                Style::default()
-                    .fg(app.theme.text_secondary_color())
-                    .bg(app.theme.body_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title("Fix")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_active_color()))
-                    .style(Style::default().bg(app.theme.body_background_color())),
-            ),
+        Block::default()
+            .title(Line::styled(
+                "Fix",
+                Style::default().fg(app.theme.text_labels_color()),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border))
+            .style(Style::default().bg(app.theme.body_background_color())),
         area,
     );
+    let inner = area.inner(ratatui::layout::Margin::new(1, 1));
+    let (now, fixed, nudge) = if overlay || inner.height >= 12 {
+        let [now, fixed, nudge] = Layout::vertical([
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Min(4),
+        ])
+        .areas(inner);
+        (now, fixed, nudge)
+    } else {
+        let [now, fixed, nudge] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+        (now, fixed, nudge)
+    };
+    map.now_area = now;
+    map.fixed_area = fixed;
+
+    let (wcag_th, apca_bar) = app.contrast_thresholds();
+    paint_fix_pair(
+        frame,
+        app,
+        now,
+        "NOW",
+        app.foreground,
+        app.background,
+        PairVerdict::of(app.foreground, app.background, wcag_th, apca_bar),
+    );
+    paint_fix_pair(
+        frame,
+        app,
+        fixed,
+        "FIXED",
+        app.fix.candidate_fg,
+        app.fix.candidate_bg,
+        PairVerdict::of(
+            app.fix.candidate_fg,
+            app.fix.candidate_bg,
+            wcag_th,
+            apca_bar,
+        ),
+    );
+
+    let [fg_row, bg_row, btn_row] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(nudge.inner(ratatui::layout::Margin::new(0, 0)));
+    map.nudge_fg = paint_l_gauge(
+        frame,
+        app,
+        fg_row,
+        "FG",
+        app.fix.candidate_fg.oklab_l(),
+        app.focus == FocusId::NudgeFg,
+    );
+    map.nudge_bg = paint_l_gauge(
+        frame,
+        app,
+        bg_row,
+        "BG",
+        app.fix.candidate_bg.oklab_l(),
+        app.focus == FocusId::NudgeBg,
+    );
+
+    let [apply, next, close] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+    ])
+    .areas(btn_row);
+    map.apply_btn = apply;
+    map.next_btn = next;
+    map.close_fix = close;
+    paint_fix_button(frame, app, apply, "Apply", app.focus == FocusId::ApplyFix);
+    paint_fix_button(frame, app, next, "Next", app.focus == FocusId::NextFix);
+    paint_fix_button(frame, app, close, "Close", app.focus == FocusId::CloseFix);
+}
+
+fn paint_fix_pair(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    title: &str,
+    fg: crate::color::Color,
+    bg: crate::color::Color,
+    verdict: PairVerdict,
+) {
+    frame.render_widget(
+        Block::default()
+            .title(Line::styled(
+                title.to_string(),
+                Style::default().fg(app.theme.text_labels_color()),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.input_border_default_color()))
+            .style(Style::default().bg(app.theme.body_background_color())),
+        area,
+    );
+    let inner = area.inner(ratatui::layout::Margin::new(1, 1));
+    let sample_style = fg.to_style().bg(bg.to_tui_color());
+    let mark_style = match verdict.label() {
+        "PASS" => Style::default().fg(app.theme.success_color()),
+        "FAIL" => Style::default().fg(app.theme.error_color()),
+        _ => Style::default().fg(app.theme.warning_color()),
+    };
+    let lines = vec![
+        Line::styled(format!("{} on {}", fg.to_hex(), bg.to_hex()), sample_style),
+        Line::from(vec![
+            Span::raw(format!("{:.2}:1 Lc {:+.0} ", verdict.ratio, verdict.lc)),
+            Span::styled(verdict.label(), mark_style),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(
+            Style::default()
+                .fg(app.theme.text_primary_color())
+                .bg(app.theme.body_background_color()),
+        ),
+        inner,
+    );
+}
+
+fn paint_l_gauge(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    label: &str,
+    l: f32,
+    focused: bool,
+) -> Rect {
+    let l = l.clamp(0.0, 1.0);
+    let [lab, bar] = Layout::horizontal([Constraint::Length(6), Constraint::Fill(1)]).areas(area);
+    let label_style = if focused {
+        Style::default().fg(app.theme.text_active_focus_color())
+    } else {
+        Style::default().fg(app.theme.text_labels_color())
+    };
+    frame.render_widget(Paragraph::new(format!("{label} L")).style(label_style), lab);
+    let width = bar.width.max(1) as usize;
+    let filled = ((l * width as f32).round() as usize).min(width);
+    let mut track = "█".repeat(filled);
+    track.push_str(&"░".repeat(width.saturating_sub(filled)));
+    let bar_style = if focused {
+        Style::default()
+            .fg(app.theme.text_active_focus_color())
+            .bg(app.theme.selected_background_color())
+    } else {
+        Style::default()
+            .fg(app.theme.text_secondary_color())
+            .bg(app.theme.body_background_color())
+    };
+    frame.render_widget(
+        Paragraph::new(format!("{track} {l:.2}")).style(bar_style),
+        bar,
+    );
+    bar
+}
+
+fn paint_fix_button(frame: &mut Frame, app: &App, area: Rect, label: &str, focused: bool) {
+    let hovered = app.hovered.is_some_and(|hit| match label {
+        "Apply" => matches!(hit, crate::layout::Hit::ApplyFix),
+        "Next" => matches!(hit, crate::layout::Hit::NextFix),
+        "Close" => matches!(hit, crate::layout::Hit::CloseFix),
+        _ => false,
+    });
+    let mut style = if focused {
+        Style::default()
+            .fg(app.theme.text_active_focus_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.text_secondary_color())
+    };
+    if hovered {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    frame.render_widget(Paragraph::new(format!("[{label}]")).style(style), area);
 }
 
 const PALETTE_VALUE_COL: u16 = 13;
@@ -327,9 +514,7 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] 
             x: inner.x,
             y: help_y,
             width: inner.width,
-            height: inner
-                .height
-                .saturating_sub(help_y.saturating_sub(inner.y)),
+            height: inner.height.saturating_sub(help_y.saturating_sub(inner.y)),
         };
         frame.render_widget(
             Paragraph::new(vec![
@@ -679,6 +864,9 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Ctrl+B: toggle bold (400↔700)   Ctrl+T: cycle font family presets"),
         Line::from("Space: swap FG/BG (on Style: apply the focused chip)"),
         Line::from("Ctrl+C: copy focused hex   Ctrl+F: toggle Fix pane   Ctrl+O: web preview"),
+        Line::from(
+            "Fix: Ctrl+N next candidate  Enter Apply/Next/Close  [ ] nudge OKLab L  drag gauges",
+        ),
         Line::from("PageUp / PageDown: scroll the left column when it does not fit"),
         Line::from("Mouse wheel over the left column: scroll (size/weight still step)"),
         Line::from(""),

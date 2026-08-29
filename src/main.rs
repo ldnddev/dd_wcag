@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 mod app;
 mod color;
 mod contrast;
+mod fix;
 mod layout;
 mod palette;
 mod theme;
@@ -24,6 +25,7 @@ mod ui;
 mod web_preview;
 
 use app::{App, FocusId, Mode, StylePreset};
+use fix::FixAxis;
 use layout::{Hit, char_index_at, char_index_at_xy, view_scroll, visual_cursor};
 use palette::PALETTE_EXPORT_PATH;
 use theme::Theme;
@@ -126,7 +128,10 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 effects.sync_preview = true;
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
-                app.fix_open = !app.fix_open;
+                app.toggle_fix();
+                if app.fix_open {
+                    effects.sync_preview = true;
+                }
             }
             KeyCode::Char('g') | KeyCode::Char('G') => {
                 app.set_mode(Mode::Palette);
@@ -154,7 +159,10 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 }
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
-                // Next Fix candidate (wired when Fix search lands).
+                if app.fix_open {
+                    app.next_fix_candidate();
+                    app.set_focus(FocusId::NextFix);
+                }
             }
             KeyCode::Up => {
                 step_focused(app, true, shift, &mut effects);
@@ -182,7 +190,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             } else if app.show_theme_debug {
                 app.show_theme_debug = false;
             } else if app.fix_open {
-                app.fix_open = false;
+                app.close_fix();
             } else if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.cancel_edit();
             } else if app.editing && app.focus.is_text_field() {
@@ -247,7 +255,14 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             } else if app.focus == FocusId::CopyHex {
                 effects.copy_hex = true;
             } else if app.focus == FocusId::FixBtn {
-                app.fix_open = !app.fix_open;
+                app.toggle_fix();
+            } else if app.focus == FocusId::ApplyFix {
+                app.apply_fix();
+                effects.sync_preview = true;
+            } else if app.focus == FocusId::NextFix {
+                app.next_fix_candidate();
+            } else if app.focus == FocusId::CloseFix {
+                app.close_fix();
             } else if app.focus == FocusId::OpenPreview {
                 effects.open_preview = true;
             } else if app.focus == FocusId::Style {
@@ -315,6 +330,26 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 app.scroll_contrast_by(if shift { 16 } else { 8 });
             }
         }
+        KeyCode::Char('[') if !is_typing(app) || is_fix_nudge_focus(app) => {
+            let axis = fix_nudge_axis(app);
+            let delta = if shift { -0.10 } else { -0.02 };
+            if app.fix_open {
+                app.nudge_fix(axis, delta);
+            } else {
+                nudge_live_color(app, axis, delta);
+                effects.sync_preview = true;
+            }
+        }
+        KeyCode::Char(']') if !is_typing(app) || is_fix_nudge_focus(app) => {
+            let axis = fix_nudge_axis(app);
+            let delta = if shift { 0.10 } else { 0.02 };
+            if app.fix_open {
+                app.nudge_fix(axis, delta);
+            } else {
+                nudge_live_color(app, axis, delta);
+                effects.sync_preview = true;
+            }
+        }
         KeyCode::Char(' ') if !app.editing && app.mode == Mode::Contrast => {
             if app.focus == FocusId::Style {
                 app.apply_style_preset(StylePreset::from_index(app.style_chip));
@@ -348,6 +383,39 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
 fn is_typing(app: &App) -> bool {
     app.editing || app.palette.editing
+}
+
+fn is_fix_nudge_focus(app: &App) -> bool {
+    matches!(app.focus, FocusId::NudgeFg | FocusId::NudgeBg)
+}
+
+fn fix_nudge_axis(app: &App) -> FixAxis {
+    match app.focus {
+        FocusId::NudgeBg | FocusId::BgHex => FixAxis::Bg,
+        _ => FixAxis::Fg,
+    }
+}
+
+fn nudge_live_color(app: &mut App, axis: FixAxis, delta: f32) {
+    match axis {
+        FixAxis::Fg => {
+            app.foreground = app.foreground.nudge_oklab_l(delta);
+            app.foreground_input = app.foreground.to_hex();
+            if app.focus == FocusId::FgHex {
+                app.current_input = app.foreground_input.clone();
+                app.cursor_char_idx = app.current_input.chars().count();
+            }
+        }
+        FixAxis::Bg => {
+            app.background = app.background.nudge_oklab_l(delta);
+            app.background_input = app.background.to_hex();
+            if app.focus == FocusId::BgHex {
+                app.current_input = app.background_input.clone();
+                app.cursor_char_idx = app.current_input.chars().count();
+            }
+        }
+    }
+    app.update_contrast();
 }
 
 fn is_contrast_scroll_hit(hit: Hit) -> bool {
@@ -390,6 +458,14 @@ fn step_focused(app: &mut App, up: bool, shift: bool, effects: &mut KeyEffects) 
             let step = if shift { 8 } else { 3 };
             app.palette.scroll_detail_by(i32::from(sign) * step);
         }
+        FocusId::NudgeFg => {
+            let delta = if shift { 0.10 } else { 0.02 };
+            app.nudge_fix(FixAxis::Fg, sign as f32 * delta);
+        }
+        FocusId::NudgeBg => {
+            let delta = if shift { 0.10 } else { 0.02 };
+            app.nudge_fix(FixAxis::Bg, sign as f32 * delta);
+        }
         _ => {}
     }
 }
@@ -399,12 +475,20 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
     let (col, row) = (mouse.column, mouse.row);
 
     match mouse.kind {
-        MouseEventKind::Moved => {
+        MouseEventKind::Moved | MouseEventKind::Drag(_) => {
             app.mouse_pos = Some((col, row));
             app.hovered = app.layout.hit(col, row);
+            if let Some(axis) = app.nudge_dragging {
+                let gauge = match axis {
+                    FixAxis::Fg => app.layout.nudge_fg,
+                    FixAxis::Bg => app.layout.nudge_bg,
+                };
+                app.set_fix_l_from_x(axis, col, gauge);
+            }
         }
         MouseEventKind::Up(_) => {
             app.scrollbar_dragging = false;
+            app.nudge_dragging = None;
         }
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
@@ -423,6 +507,16 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                         app.set_focus(FocusId::Detail);
                         let step = if shift { 8 } else { 3 };
                         app.palette.scroll_detail_by(if up { -step } else { step });
+                    }
+                    Hit::NudgeFg => {
+                        app.set_focus(FocusId::NudgeFg);
+                        let delta = if shift { 0.10 } else { 0.02 };
+                        app.nudge_fix(FixAxis::Fg, if up { delta } else { -delta });
+                    }
+                    Hit::NudgeBg => {
+                        app.set_focus(FocusId::NudgeBg);
+                        let delta = if shift { 0.10 } else { 0.02 };
+                        app.nudge_fix(FixAxis::Bg, if up { delta } else { -delta });
                     }
                     hit if is_contrast_scroll_hit(hit) => {
                         let step = if shift { 8 } else { 3 };
@@ -565,8 +659,26 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                     effects.copy_hex = true;
                 }
                 Hit::FixBtn => {
-                    app.fix_open = !app.fix_open;
-                    app.set_focus(FocusId::FixBtn);
+                    app.toggle_fix();
+                }
+                Hit::ApplyFix => {
+                    app.set_focus(FocusId::ApplyFix);
+                    app.apply_fix();
+                    effects.sync_preview = true;
+                }
+                Hit::NextFix => {
+                    app.set_focus(FocusId::NextFix);
+                    app.next_fix_candidate();
+                }
+                Hit::NudgeFg => {
+                    app.set_focus(FocusId::NudgeFg);
+                    app.nudge_dragging = Some(FixAxis::Fg);
+                    app.set_fix_l_from_x(FixAxis::Fg, col, app.layout.nudge_fg);
+                }
+                Hit::NudgeBg => {
+                    app.set_focus(FocusId::NudgeBg);
+                    app.nudge_dragging = Some(FixAxis::Bg);
+                    app.set_fix_l_from_x(FixAxis::Bg, col, app.layout.nudge_bg);
                 }
                 Hit::WebBtn => {
                     app.set_focus(FocusId::OpenPreview);
@@ -597,7 +709,7 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                         app.contrast_scroll = (next as u16).min(app.contrast_max_scroll);
                     }
                 }
-                Hit::FixOutside | Hit::CloseFix => app.fix_open = false,
+                Hit::FixOutside | Hit::CloseFix => app.close_fix(),
                 _ => {}
             }
         }
@@ -1001,8 +1113,58 @@ mod tests {
         let mut app = App::new();
         handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert!(app.fix_open);
+        assert_eq!(app.focus, FocusId::NudgeFg);
         handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert!(!app.fix_open);
+    }
+
+    fn gray_on_gray(app: &mut App) {
+        app.set_focus(FocusId::FgHex);
+        app.current_input = "#808080".to_string();
+        assert!(app.submit_input());
+        app.set_focus(FocusId::BgHex);
+        app.current_input = "#808080".to_string();
+        assert!(app.submit_input());
+        app.update_contrast();
+    }
+
+    #[test]
+    fn fix_apply_writes_candidate_into_contrast_pair() {
+        let mut app = App::new();
+        gray_on_gray(&mut app);
+        let original = app.foreground.to_hex();
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(app.fix_open);
+        let candidate = app.fix.candidate_fg.to_hex();
+        assert_ne!(candidate, original);
+        app.set_focus(FocusId::ApplyFix);
+        let effects = handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.foreground.to_hex(), candidate);
+        assert!(effects.sync_preview);
+    }
+
+    #[test]
+    fn ctrl_n_advances_fix_candidate() {
+        let mut app = App::new();
+        gray_on_gray(&mut app);
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let first = app.fix.candidate_fg.to_hex();
+        handle_key_event(&mut app, key(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        if app.fix.candidate_count() > 1 {
+            assert_ne!(app.fix.candidate_fg.to_hex(), first);
+        }
+    }
+
+    #[test]
+    fn brackets_nudge_fix_oklab_l() {
+        let mut app = App::new();
+        gray_on_gray(&mut app);
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let before = app.fix.candidate_fg.oklab_l();
+        handle_key_event(&mut app, key(KeyCode::Char(']'), KeyModifiers::NONE));
+        assert!(app.fix.candidate_fg.oklab_l() > before);
+        handle_key_event(&mut app, key(KeyCode::Char('['), KeyModifiers::NONE));
+        assert!((app.fix.candidate_fg.oklab_l() - before).abs() < 0.015);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! All methods are documented for learning.
 
 use anyhow::{Result, anyhow};
-use palette::{Hsl, IntoColor, LinSrgb, Srgb};
+use palette::{Hsl, IntoColor, LinSrgb, Oklab, Srgb};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color(pub Srgb);
@@ -111,6 +111,26 @@ impl Color {
     pub fn luminance(&self) -> f64 {
         let lin: LinSrgb = self.0.into_color();
         0.2126 * lin.red as f64 + 0.7152 * lin.green as f64 + 0.0722 * lin.blue as f64
+    }
+
+    pub fn oklab_l(&self) -> f32 {
+        let lab: Oklab = self.0.into_color();
+        lab.l
+    }
+
+    pub fn with_oklab_l(self, l: f32) -> Color {
+        let mut lab: Oklab = self.0.into_color();
+        lab.l = l.clamp(0.0, 1.0);
+        let rgb: Srgb = lab.into_color();
+        Color(Srgb::new(
+            rgb.red.clamp(0.0, 1.0),
+            rgb.green.clamp(0.0, 1.0),
+            rgb.blue.clamp(0.0, 1.0),
+        ))
+    }
+
+    pub fn nudge_oklab_l(self, delta: f32) -> Color {
+        self.with_oklab_l(self.oklab_l() + delta)
     }
 
     pub fn rgb_u8(&self) -> (u8, u8, u8) {
@@ -307,5 +327,18 @@ mod tests {
         let bg = Color(Srgb::new(1.0, 1.0, 1.0));
         assert!(fg.apca_passes(&bg, 16, false)); // Should pass for normal text
         assert!(!fg.apca_passes(&Color(Srgb::new(0.8, 0.8, 0.8)), 10, false)); // Low contrast small text should fail
+    }
+
+    #[test]
+    fn oklab_l_clamps_and_preserves_ab() {
+        let gray = Color(Srgb::new(0.4, 0.5, 0.6));
+        let start: Oklab = gray.0.into_color();
+        let darker = gray.with_oklab_l(0.2);
+        let darker_lab: Oklab = darker.0.into_color();
+        assert!((darker.oklab_l() - 0.2).abs() < 0.02);
+        assert!((darker_lab.a - start.a).abs() < 0.02);
+        assert!((darker_lab.b - start.b).abs() < 0.02);
+        assert!(gray.with_oklab_l(-1.0).oklab_l() < 0.05);
+        assert!(gray.with_oklab_l(9.0).oklab_l() > 0.95);
     }
 }

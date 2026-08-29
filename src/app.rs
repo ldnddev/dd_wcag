@@ -4,7 +4,8 @@
 //! It includes the App struct with all fields for color management,
 //! input handling, and UI state as per the architecture spec.
 
-use crate::color::Color;
+use crate::color::{Color, is_large_text};
+use crate::fix::{FixAxis, FixState};
 use crate::layout::{Hit, LayoutMap};
 use crate::palette::{PaletteState, generate_palette, parse_palette_color, validate_export};
 use crate::theme::{Theme, ThemeSource};
@@ -262,6 +263,8 @@ pub struct App {
     pub focus: FocusId,
     pub editing: bool,
     pub fix_open: bool,
+    pub fix: FixState,
+    pub nudge_dragging: Option<FixAxis>,
     pub targets: Targets,
     pub layout: LayoutMap,
     pub hovered: Option<Hit>,
@@ -316,6 +319,8 @@ impl App {
             focus: FocusId::FgHex,
             editing: true,
             fix_open: false,
+            fix: FixState::default(),
+            nudge_dragging: None,
             targets: Targets::default(),
             layout: LayoutMap::default(),
             hovered: None,
@@ -425,6 +430,107 @@ impl App {
             Mode::Palette => FocusId::Role(0),
         };
         self.sync_focus_input();
+    }
+
+    pub fn contrast_thresholds(&self) -> (f64, f64) {
+        let large = is_large_text(self.font_size_px, self.weight);
+        (
+            self.targets.wcag.text_threshold(large),
+            self.targets.apca.value(),
+        )
+    }
+
+    fn refresh_fix_search(&mut self) {
+        let (wcag, apca) = self.contrast_thresholds();
+        self.fix
+            .search(self.foreground, self.background, wcag, apca);
+    }
+
+    pub fn toggle_fix(&mut self) {
+        if self.fix_open {
+            self.close_fix();
+        } else {
+            self.open_fix();
+        }
+    }
+
+    pub fn open_fix(&mut self) {
+        self.fix_open = true;
+        self.nudge_dragging = None;
+        self.fix.axis = FixAxis::Fg;
+        self.refresh_fix_search();
+        self.set_focus(FocusId::NudgeFg);
+    }
+
+    pub fn close_fix(&mut self) {
+        self.fix_open = false;
+        self.nudge_dragging = None;
+        if matches!(
+            self.focus,
+            FocusId::NudgeFg
+                | FocusId::NudgeBg
+                | FocusId::ApplyFix
+                | FocusId::NextFix
+                | FocusId::CloseFix
+        ) {
+            self.set_focus(FocusId::FixBtn);
+        }
+    }
+
+    pub fn apply_fix(&mut self) {
+        if !self.fix_open {
+            return;
+        }
+        self.foreground = self.fix.candidate_fg;
+        self.background = self.fix.candidate_bg;
+        self.foreground_input = self.foreground.to_hex();
+        self.background_input = self.background.to_hex();
+        match self.focus {
+            FocusId::FgHex => {
+                self.current_input = self.foreground_input.clone();
+                self.cursor_char_idx = self.current_input.chars().count();
+            }
+            FocusId::BgHex => {
+                self.current_input = self.background_input.clone();
+                self.cursor_char_idx = self.current_input.chars().count();
+            }
+            _ => {}
+        }
+        self.update_contrast();
+        self.refresh_fix_search();
+        self.notify_status(format!(
+            "Applied {} on {}",
+            self.foreground.to_hex(),
+            self.background.to_hex()
+        ));
+    }
+
+    pub fn next_fix_candidate(&mut self) {
+        if !self.fix_open {
+            return;
+        }
+        self.fix.next();
+    }
+
+    pub fn nudge_fix(&mut self, axis: FixAxis, delta: f32) {
+        if !self.fix_open {
+            return;
+        }
+        self.fix.nudge(axis, delta);
+        self.focus = match axis {
+            FixAxis::Fg => FocusId::NudgeFg,
+            FixAxis::Bg => FocusId::NudgeBg,
+        };
+        self.editing = false;
+    }
+
+    pub fn set_fix_l_from_x(&mut self, axis: FixAxis, x: u16, gauge: ratatui::layout::Rect) {
+        if gauge.width <= 1 {
+            return;
+        }
+        let rel = f32::from(x.saturating_sub(gauge.x));
+        let l = (rel / f32::from(gauge.width.saturating_sub(1))).clamp(0.0, 1.0);
+        self.fix.set_axis_l(axis, l);
     }
 
     pub fn scroll_contrast_by(&mut self, delta: i32) {
