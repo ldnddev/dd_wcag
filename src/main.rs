@@ -7,9 +7,9 @@ use crossterm::{
         KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, Stdout, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -24,7 +24,7 @@ mod ui;
 mod web_preview;
 
 use app::{App, FocusId, Mode, StylePreset};
-use layout::{char_index_at, Hit};
+use layout::{Hit, char_index_at, char_index_at_xy, view_scroll, visual_cursor};
 use palette::PALETTE_EXPORT_PATH;
 use theme::Theme;
 
@@ -189,8 +189,8 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
                 app.editing = false;
             }
         }
-        KeyCode::Char('1') if !app.editing => app.set_mode(Mode::Contrast),
-        KeyCode::Char('2') if !app.editing => app.set_mode(Mode::Palette),
+        KeyCode::Char('1') if !is_typing(app) => app.set_mode(Mode::Contrast),
+        KeyCode::Char('2') if !is_typing(app) => app.set_mode(Mode::Palette),
         KeyCode::Tab => {
             if try_apply_active_input(app) {
                 effects.sync_preview = true;
@@ -303,12 +303,16 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             if app.mode == Mode::Palette {
                 app.set_focus(FocusId::Detail);
                 app.palette.scroll_detail_by(-10);
+            } else if app.mode == Mode::Contrast {
+                app.scroll_contrast_by(if shift { -16 } else { -8 });
             }
         }
         KeyCode::PageDown => {
             if app.mode == Mode::Palette {
                 app.set_focus(FocusId::Detail);
                 app.palette.scroll_detail_by(10);
+            } else if app.mode == Mode::Contrast {
+                app.scroll_contrast_by(if shift { 16 } else { 8 });
             }
         }
         KeyCode::Char(' ') if !app.editing && app.mode == Mode::Contrast => {
@@ -340,6 +344,29 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     }
 
     effects
+}
+
+fn is_typing(app: &App) -> bool {
+    app.editing || app.palette.editing
+}
+
+fn is_contrast_scroll_hit(hit: Hit) -> bool {
+    matches!(
+        hit,
+        Hit::ContrastPanel
+            | Hit::ContrastScrollbar
+            | Hit::FgInput
+            | Hit::FgSwatch
+            | Hit::BgInput
+            | Hit::BgSwatch
+            | Hit::Style(_)
+            | Hit::PreviewText
+            | Hit::FontFamily
+            | Hit::Swap
+            | Hit::Copy
+            | Hit::FixBtn
+            | Hit::WebBtn
+    )
 }
 
 fn step_focused(app: &mut App, up: bool, shift: bool, effects: &mut KeyEffects) {
@@ -397,6 +424,10 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                         let step = if shift { 8 } else { 3 };
                         app.palette.scroll_detail_by(if up { -step } else { step });
                     }
+                    hit if is_contrast_scroll_hit(hit) => {
+                        let step = if shift { 8 } else { 3 };
+                        app.scroll_contrast_by(if up { -step } else { step });
+                    }
                     _ => {}
                 }
             }
@@ -442,8 +473,11 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                     if try_apply_active_input(app) {
                         app.set_focus(FocusId::FgHex);
                         if matches!(hit, Hit::FgInput) {
-                            app.cursor_char_idx =
-                                char_index_at(app.layout.fg_input, col, app.current_input.chars().count());
+                            app.cursor_char_idx = char_index_at(
+                                app.layout.fg_input,
+                                col,
+                                app.current_input.chars().count(),
+                            );
                         }
                     }
                 }
@@ -451,19 +485,23 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                     if try_apply_active_input(app) {
                         app.set_focus(FocusId::BgHex);
                         if matches!(hit, Hit::BgInput) {
-                            app.cursor_char_idx =
-                                char_index_at(app.layout.bg_input, col, app.current_input.chars().count());
+                            app.cursor_char_idx = char_index_at(
+                                app.layout.bg_input,
+                                col,
+                                app.current_input.chars().count(),
+                            );
                         }
                     }
                 }
                 Hit::PreviewText => {
                     if try_apply_active_input(app) {
                         app.set_focus(FocusId::PreviewText);
-                        app.cursor_char_idx = char_index_at(
-                            app.layout.preview_text,
-                            col,
-                            app.current_input.chars().count(),
-                        );
+                        let area = app.layout.preview_text;
+                        let (cursor_row, _) =
+                            visual_cursor(&app.current_input, app.cursor_char_idx, area.width);
+                        let scroll = view_scroll(cursor_row, area.height.max(1));
+                        app.cursor_char_idx =
+                            char_index_at_xy(&app.current_input, area, col, row, scroll);
                     }
                 }
                 Hit::FontFamily => {
@@ -479,17 +517,37 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                 Hit::SizeInput | Hit::SizeDec | Hit::SizeInc => {
                     app.set_focus(FocusId::Size);
                     if matches!(hit, Hit::SizeInc) {
-                        step_focused(app, true, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                        step_focused(
+                            app,
+                            true,
+                            mouse.modifiers.contains(KeyModifiers::SHIFT),
+                            &mut effects,
+                        );
                     } else if matches!(hit, Hit::SizeDec) {
-                        step_focused(app, false, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                        step_focused(
+                            app,
+                            false,
+                            mouse.modifiers.contains(KeyModifiers::SHIFT),
+                            &mut effects,
+                        );
                     }
                 }
                 Hit::WeightInput | Hit::WeightDec | Hit::WeightInc => {
                     app.set_focus(FocusId::Weight);
                     if matches!(hit, Hit::WeightInc) {
-                        step_focused(app, true, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                        step_focused(
+                            app,
+                            true,
+                            mouse.modifiers.contains(KeyModifiers::SHIFT),
+                            &mut effects,
+                        );
                     } else if matches!(hit, Hit::WeightDec) {
-                        step_focused(app, false, mouse.modifiers.contains(KeyModifiers::SHIFT), &mut effects);
+                        step_focused(
+                            app,
+                            false,
+                            mouse.modifiers.contains(KeyModifiers::SHIFT),
+                            &mut effects,
+                        );
                     }
                 }
                 Hit::Style(i) => {
@@ -529,6 +587,15 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                 }
                 Hit::Detail | Hit::DetailScrollbar => {
                     app.set_focus(FocusId::Detail);
+                }
+                Hit::ContrastScrollbar => {
+                    let track = app.layout.contrast_scrollbar;
+                    if track.height > 0 && app.contrast_max_scroll > 0 {
+                        let rel = row.saturating_sub(track.y);
+                        let next = (u32::from(rel) * u32::from(app.contrast_max_scroll))
+                            / u32::from(track.height.max(1));
+                        app.contrast_scroll = (next as u16).min(app.contrast_max_scroll);
+                    }
                 }
                 Hit::FixOutside | Hit::CloseFix => app.fix_open = false,
                 _ => {}
@@ -800,6 +867,24 @@ mod tests {
     }
 
     #[test]
+    fn keys_1_and_2_type_into_palette_color_edit() {
+        let mut app = App::new();
+        app.set_mode(Mode::Palette);
+        app.set_focus(FocusId::Role(1));
+        app.palette.selected_idx = 1;
+        app.palette.begin_edit();
+        app.palette.edit_input.clear();
+        app.palette.edit_cursor_char_idx = 0;
+
+        handle_key_event(&mut app, key(KeyCode::Char('1'), KeyModifiers::NONE));
+        handle_key_event(&mut app, key(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        assert_eq!(app.mode, Mode::Palette);
+        assert!(app.palette.editing);
+        assert_eq!(app.palette.edit_input, "12");
+    }
+
+    #[test]
     fn keys_1_and_2_switch_mode() {
         let mut app = App::new();
         app.set_focus(FocusId::Swap);
@@ -864,6 +949,18 @@ mod tests {
         assert_eq!(app.mode, Mode::Palette);
         assert!(app.palette.generated.is_some());
         assert_eq!(app.focus, FocusId::Detail);
+    }
+
+    #[test]
+    fn contrast_page_keys_scroll_the_left_column() {
+        let mut app = App::new();
+        app.contrast_max_scroll = 20;
+        handle_key_event(&mut app, key(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.contrast_scroll, 8);
+        handle_key_event(&mut app, key(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(app.contrast_scroll, 0);
+        handle_key_event(&mut app, key(KeyCode::PageDown, KeyModifiers::SHIFT));
+        assert_eq!(app.contrast_scroll, 16);
     }
 
     #[test]

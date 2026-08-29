@@ -1,14 +1,14 @@
 use crate::app::{App, FocusId, Mode};
 use crate::contrast::render_contrast;
 use crate::layout::{
-    breakpoint, centered, split_body_with_fix, split_header, split_shell, LayoutMap,
+    LayoutMap, breakpoint, caret_line, centered, split_body_with_fix, split_header, split_shell,
 };
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
@@ -62,11 +62,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             map.preview = rects.preview;
             map.scores_wcag = rects.scores_wcag;
             map.scores_apca = rects.scores_apca;
+            map.contrast_panel = rects.panel;
+            map.contrast_scrollbar = rects.scrollbar;
+            if app.contrast_max_scroll > 0 && rects.scrollbar.width > 0 {
+                render_edge_scrollbar(
+                    frame,
+                    app,
+                    rects.scrollbar,
+                    app.contrast_scroll as usize,
+                    app.contrast_max_scroll as usize,
+                );
+            }
         }
         Mode::Palette => {
-            let (detail, scrollbar) = render_palette_tab(frame, app, main);
+            let (detail, scrollbar, roles) = render_palette_tab(frame, app, main);
             map.detail = detail;
             map.detail_scrollbar = scrollbar;
+            map.role_rows = roles;
         }
     }
 
@@ -156,13 +168,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         "F1: Help   F2: Theme   Tab: Focus   1/2: Contrast/Palette   Ctrl+G: Generate   Ctrl+F: Fix   Ctrl+O: Web   Ctrl+Q: Quit   (mouse: click/scroll/drag)"
     };
     frame.render_widget(
-        Paragraph::new(keys)
-            .alignment(Alignment::Left)
-            .style(
-                Style::default()
-                    .fg(app.theme.text_secondary_color())
-                    .bg(app.theme.base_background_color()),
-            ),
+        Paragraph::new(keys).alignment(Alignment::Left).style(
+            Style::default()
+                .fg(app.theme.text_secondary_color())
+                .bg(app.theme.base_background_color()),
+        ),
         area,
     );
 }
@@ -186,8 +196,23 @@ fn render_fix_placeholder(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+const PALETTE_VALUE_COL: u16 = 13;
+
 fn cursor_position(app: &App, map: &LayoutMap) -> Option<(u16, u16)> {
     if app.mode == Mode::Palette && app.palette.editing {
+        let idx = app.palette.selected_idx.min(3);
+        let area = map.role_rows[idx];
+        if area.width < 1 || area.height < 1 {
+            return None;
+        }
+        let col = PALETTE_VALUE_COL.saturating_add(app.palette.cursor_col());
+        let x = area
+            .x
+            .saturating_add(col)
+            .min(area.x.saturating_add(area.width.saturating_sub(1)));
+        return Some((x, area.y));
+    }
+    if !app.editing {
         return None;
     }
     let area = match app.focus {
@@ -197,8 +222,22 @@ fn cursor_position(app: &App, map: &LayoutMap) -> Option<(u16, u16)> {
         FocusId::FontFamily => map.font_family,
         _ => return None,
     };
-    if area.width < 2 {
+    if area.width < 1 || area.height < 1 {
         return None;
+    }
+    if app.focus == FocusId::PreviewText {
+        let (row, col) =
+            crate::layout::visual_cursor(&app.current_input, app.cursor_char_idx, area.width);
+        let scroll = crate::layout::view_scroll(row, area.height);
+        let y = area.y.saturating_add(row.saturating_sub(scroll));
+        let x = area
+            .x
+            .saturating_add(col)
+            .min(area.x.saturating_add(area.width.saturating_sub(1)));
+        return Some((
+            x,
+            y.min(area.y.saturating_add(area.height.saturating_sub(1))),
+        ));
     }
     let col = app.cursor_char_idx.min(u16::MAX as usize) as u16;
     let x = area
@@ -208,67 +247,105 @@ fn cursor_position(app: &App, map: &LayoutMap) -> Option<(u16, u16)> {
     Some((x, area.y))
 }
 
-fn render_palette_tab(frame: &mut Frame, app: &mut App, area: Rect) -> (Rect, Rect) {
+fn render_palette_tab(frame: &mut Frame, app: &mut App, area: Rect) -> (Rect, Rect, [Rect; 4]) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(area);
 
-    render_palette_inputs(frame, app, chunks[0]);
+    let roles = render_palette_inputs(frame, app, chunks[0]);
     let scrollbar = render_palette_detail(frame, app, chunks[1]);
-    (chunks[1], scrollbar)
+    (chunks[1], scrollbar, roles)
 }
 
-fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) {
-    let selected = app.palette.selected();
-    let mut lines = Vec::new();
-    for input in crate::palette::PaletteInput::ALL {
-        let marker = if input == selected { ">" } else { " " };
-        let required = if input.required() { "*" } else { " " };
-        let value = if app.palette.editing && input == selected {
-            app.palette.edit_input.as_str()
-        } else {
-            app.palette.input_for(input)
-        };
-        let style = if input == selected {
-            Style::default()
-                .fg(app.theme.text_active_focus_color())
-                .bg(app.theme.selected_background_color())
-        } else {
-            Style::default().fg(app.theme.text_primary_color())
-        };
-        lines.push(Line::styled(
-            format!("{marker} {:<9}{required} {value}", input.label()),
-            style,
-        ));
-    }
+fn palette_caret_style(app: &App) -> Style {
+    Style::default()
+        .fg(app.theme.selected_background_color())
+        .bg(app.theme.cursor_color())
+        .add_modifier(Modifier::BOLD)
+}
 
-    lines.extend([
-        Line::from(""),
-        Line::from("* required   Text roles are fixed"),
-        Line::from("Enter: edit   Ctrl+G: generate"),
-        Line::from("Ctrl+S: save (choose file)   Ctrl+C: copy"),
-    ]);
-
+fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] {
     frame.render_widget(
-        Paragraph::new(lines)
+        Block::default()
+            .title(Line::styled(
+                "Palette Inputs",
+                Style::default().fg(app.theme.text_labels_color()),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border_default_color()))
             .style(
                 Style::default()
                     .fg(app.theme.text_primary_color())
                     .bg(app.theme.body_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title(Line::styled(
-                        "Palette Inputs",
-                        Style::default().fg(app.theme.text_labels_color()),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_default_color()))
-                    .style(Style::default().bg(app.theme.body_background_color())),
             ),
         area,
     );
+
+    let inner = area.inner(ratatui::layout::Margin::new(1, 1));
+    let selected = app.palette.selected();
+    let caret = palette_caret_style(app);
+    let mut role_rows = [Rect::default(); 4];
+    for (i, input) in crate::palette::PaletteInput::ALL.iter().enumerate() {
+        let row = Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(i as u16),
+            width: inner.width,
+            height: 1,
+        };
+        role_rows[i] = row;
+        let marker = if *input == selected { ">" } else { " " };
+        let required = if input.required() { "*" } else { " " };
+        let prefix = format!("{marker} {:<9}{required} ", input.label());
+        let value = if app.palette.editing && *input == selected {
+            app.palette.edit_input.as_str()
+        } else {
+            app.palette.input_for(*input)
+        };
+        let style = if *input == selected {
+            Style::default()
+                .fg(app.theme.text_active_focus_color())
+                .bg(app.theme.selected_background_color())
+        } else {
+            Style::default()
+                .fg(app.theme.text_primary_color())
+                .bg(app.theme.body_background_color())
+        };
+        let line = if app.palette.editing && *input == selected {
+            let mut spans = vec![Span::styled(prefix, style)];
+            spans.extend(caret_line(value, app.palette.edit_cursor_char_idx, style, caret).spans);
+            Line::from(spans)
+        } else {
+            Line::styled(format!("{prefix}{value}"), style)
+        };
+        frame.render_widget(Paragraph::new(line).style(style), row);
+    }
+
+    let help_y = inner.y.saturating_add(5);
+    if help_y < inner.y.saturating_add(inner.height) {
+        let help = Rect {
+            x: inner.x,
+            y: help_y,
+            width: inner.width,
+            height: inner
+                .height
+                .saturating_sub(help_y.saturating_sub(inner.y)),
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from("* required   Text roles are fixed"),
+                Line::from("Enter: edit   Ctrl+G: generate"),
+                Line::from("Ctrl+S: save (choose file)   Ctrl+C: copy"),
+            ])
+            .style(
+                Style::default()
+                    .fg(app.theme.text_secondary_color())
+                    .bg(app.theme.body_background_color()),
+            ),
+            help,
+        );
+    }
+    role_rows
 }
 
 fn render_palette_detail(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
@@ -376,7 +453,11 @@ fn render_palette_detail(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
     app.palette.detail_max_scroll = max_scroll;
     app.palette.detail_scroll = app.palette.detail_scroll.min(max_scroll);
     let scroll = app.palette.detail_scroll;
-    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible_height).collect();
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll)
+        .take(visible_height)
+        .collect();
     let show_scrollbar = max_scroll > 0;
     let title = if max_scroll > 0 {
         format!("Generated Detail  {}/{}", scroll + 1, max_scroll + 1)
@@ -436,7 +517,8 @@ fn render_toast(frame: &mut Frame, app: &App, area: Rect) -> Option<Rect> {
     };
 
     let line_count = message.lines().count().max(1) as u16;
-    let toast = crate::layout::bottom_right_rect(area, 32, line_count.saturating_add(2).clamp(3, 4));
+    let toast =
+        crate::layout::bottom_right_rect(area, 32, line_count.saturating_add(2).clamp(3, 4));
     frame.render_widget(Clear, toast);
     frame.render_widget(
         Paragraph::new(message)
@@ -459,6 +541,59 @@ fn render_toast(frame: &mut Frame, app: &App, area: Rect) -> Option<Rect> {
         toast,
     );
     Some(toast)
+}
+
+fn render_edge_scrollbar(
+    frame: &mut Frame,
+    app: &App,
+    track: Rect,
+    scroll: usize,
+    max_scroll: usize,
+) {
+    if track.height == 0 || track.width == 0 {
+        return;
+    }
+    for offset in 0..track.height {
+        frame.render_widget(
+            Paragraph::new("│").style(
+                Style::default()
+                    .fg(app.theme.text_secondary_color())
+                    .bg(app.theme.body_background_color()),
+            ),
+            Rect {
+                x: track.x,
+                y: track.y.saturating_add(offset),
+                width: 1,
+                height: 1,
+            },
+        );
+    }
+    let thumb_y_offset = if max_scroll == 0 || track.height == 0 {
+        0
+    } else {
+        ((scroll as u32 * track.height.saturating_sub(1) as u32) / max_scroll as u32) as u16
+    };
+    let hovered = app.mouse_pos.is_some_and(|(col, row)| {
+        col == track.x && row >= track.y && row < track.y.saturating_add(track.height)
+    });
+    let thumb_color = if hovered || app.scrollbar_dragging {
+        app.theme.scrollbar_hover_color()
+    } else {
+        app.theme.scrollbar_color()
+    };
+    frame.render_widget(
+        Paragraph::new("█").style(
+            Style::default()
+                .fg(thumb_color)
+                .bg(app.theme.body_background_color()),
+        ),
+        Rect {
+            x: track.x,
+            y: track.y.saturating_add(thumb_y_offset),
+            width: 1,
+            height: 1,
+        },
+    );
 }
 
 fn render_vertical_scrollbar(
@@ -524,12 +659,16 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
     let lines = vec![
         Line::from("Navigation"),
         Line::from("1 / 2: Contrast / Palette"),
-        Line::from("Tab / Shift+Tab: next/prev control (auto-apply; invalid color blocks the move)"),
+        Line::from(
+            "Tab / Shift+Tab: next/prev control (auto-apply; invalid color blocks the move)",
+        ),
         Line::from("Left / Right: caret in a text field; Style chips: previous/next preset"),
         Line::from("Up / Down: Size/Weight step; Style chips: previous/next; Palette list scroll"),
         Line::from("Ctrl+Up / Ctrl+Down: step the focused Size, Weight, Style, or Fix gauge"),
         Line::from("Shift+Ctrl+Up / Shift+Ctrl+Down: larger step (size ±4, weight ±200)"),
-        Line::from("Enter: commit field, activate button, edit palette role, newline in PreviewText"),
+        Line::from(
+            "Enter: commit field, activate button, edit palette role, newline in PreviewText",
+        ),
         Line::from("Backspace: delete before caret"),
         Line::from("Esc: blur edit, close Fix, close this popup or F2 (never quits)"),
         Line::from("Ctrl+Q: quit"),
@@ -540,11 +679,13 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Ctrl+B: toggle bold (400↔700)   Ctrl+T: cycle font family presets"),
         Line::from("Space: swap FG/BG (on Style: apply the focused chip)"),
         Line::from("Ctrl+C: copy focused hex   Ctrl+F: toggle Fix pane   Ctrl+O: web preview"),
+        Line::from("PageUp / PageDown: scroll the left column when it does not fit"),
+        Line::from("Mouse wheel over the left column: scroll (size/weight still step)"),
         Line::from(""),
         Line::from("Palette"),
         Line::from("Ctrl+G: generate full _palette.scss (focuses the detail list to scroll)"),
         Line::from("Enter: begin/commit role edit   Up/Down: select role; Detail: scroll"),
-        Line::from("PageUp / PageDown: scroll generated output"),
+        Line::from("PageUp / PageDown: scroll generated output (Contrast: left column)"),
         Line::from("Ctrl+S: save via file picker   Ctrl+C: copy generated SCSS"),
         Line::from(""),
         Line::from("F1: this help   F2: theme source and tokens"),

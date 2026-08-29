@@ -373,6 +373,10 @@ impl Theme {
         color_or_reset(&self.scrollbar_hover)
     }
 
+    pub fn cursor_color(&self) -> Color {
+        color_or_reset(&self.cursor)
+    }
+
     pub fn warning_color(&self) -> Color {
         color_or_reset(&self.warning)
     }

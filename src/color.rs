@@ -3,7 +3,7 @@
 //! Extended for Phase 2 with RGB/HSL parsing, conversions, contrast ratio, and style generation.
 //! All methods are documented for learning.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use palette::{Hsl, IntoColor, LinSrgb, Srgb};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

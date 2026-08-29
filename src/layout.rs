@@ -1,4 +1,6 @@
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Breakpoint {
@@ -17,12 +19,8 @@ impl Breakpoint {
         }
     }
 
-    pub fn contrast_form_width(self) -> Option<u16> {
-        match self {
-            Self::Wide => Some(34),
-            Self::Medium => Some(30),
-            Self::Narrow => None,
-        }
+    pub fn contrast_side_by_side(self) -> bool {
+        !matches!(self, Self::Narrow)
     }
 
     pub fn palette_roles_width(self) -> Option<u16> {
@@ -77,8 +75,8 @@ pub fn split_body_with_fix(body: Rect, bp: Breakpoint, fix_open: bool) -> (Rect,
     }
     match bp.fix_strip_height() {
         Some(height) => {
-            let [main, fix] = Layout::vertical([Constraint::Fill(1), Constraint::Length(height)])
-                .areas(body);
+            let [main, fix] =
+                Layout::vertical([Constraint::Fill(1), Constraint::Length(height)]).areas(body);
             (main, Some(fix))
         }
         None => (body, None),
@@ -130,7 +128,9 @@ pub fn bottom_right_rect(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2)).max(16);
     let height = height.min(area.height.saturating_sub(3)).max(2);
     Rect {
-        x: area.x.saturating_add(area.width.saturating_sub(width.saturating_add(1))),
+        x: area
+            .x
+            .saturating_add(area.width.saturating_sub(width.saturating_add(1))),
         y: area
             .y
             .saturating_add(area.height.saturating_sub(height.saturating_add(2))),
@@ -162,6 +162,8 @@ pub enum Hit {
     Copy,
     FixBtn,
     WebBtn,
+    ContrastPanel,
+    ContrastScrollbar,
     Role(usize),
     TextRow,
     Generate,
@@ -210,6 +212,8 @@ pub struct LayoutMap {
     pub preview: Rect,
     pub scores_wcag: Rect,
     pub scores_apca: Rect,
+    pub contrast_panel: Rect,
+    pub contrast_scrollbar: Rect,
     pub role_rows: [Rect; 4],
     pub text_row: Rect,
     pub generate_btn: Rect,
@@ -248,6 +252,158 @@ pub fn char_index_at(area: Rect, x: u16, len: usize) -> usize {
         return 0;
     }
     ((x - text_x) as usize).min(len)
+}
+
+/// Wrap `text` to `width` columns, honoring explicit newlines.
+pub fn visual_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut ended_with_newline = false;
+    for ch in text.chars() {
+        if ch == '\n' {
+            lines.push(std::mem::take(&mut current));
+            ended_with_newline = true;
+            continue;
+        }
+        ended_with_newline = false;
+        current.push(ch);
+        if current.chars().count() >= width {
+            lines.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() || lines.is_empty() || ended_with_newline {
+        lines.push(current);
+    }
+    lines
+}
+
+pub fn visual_cursor(text: &str, char_idx: usize, width: u16) -> (u16, u16) {
+    let width = width.max(1);
+    let mut row = 0u16;
+    let mut col = 0u16;
+    for (i, ch) in text.chars().enumerate() {
+        if i >= char_idx {
+            break;
+        }
+        if ch == '\n' {
+            row = row.saturating_add(1);
+            col = 0;
+        } else {
+            col = col.saturating_add(1);
+            if col >= width {
+                row = row.saturating_add(1);
+                col = 0;
+            }
+        }
+    }
+    (row, col)
+}
+
+/// Highlight the character at `cursor` (or a trailing space if the caret is at the end).
+pub fn caret_line(text: &str, cursor: usize, style: Style, caret: Style) -> Line<'static> {
+    let chars: Vec<char> = text.chars().collect();
+    let idx = cursor.min(chars.len());
+    let mut spans = Vec::new();
+    if idx > 0 {
+        spans.push(Span::styled(chars[..idx].iter().collect::<String>(), style));
+    }
+    let under = if idx < chars.len() {
+        chars[idx].to_string()
+    } else {
+        " ".to_string()
+    };
+    spans.push(Span::styled(under, caret));
+    if idx + 1 < chars.len() {
+        spans.push(Span::styled(
+            chars[idx + 1..].iter().collect::<String>(),
+            style,
+        ));
+    }
+    Line::from(spans)
+}
+
+pub fn view_scroll(cursor_row: u16, height: u16) -> u16 {
+    let height = height.max(1);
+    cursor_row.saturating_sub(height.saturating_sub(1))
+}
+
+/// Map a rect laid out in a virtual (0, 0) canvas into `viewport`, shifted by `scroll` rows.
+pub fn visible_rect(virtual_rect: Rect, viewport: Rect, scroll: u16) -> Rect {
+    if virtual_rect.width == 0
+        || virtual_rect.height == 0
+        || viewport.width == 0
+        || viewport.height == 0
+    {
+        return Rect::default();
+    }
+    let x = i32::from(viewport.x) + i32::from(virtual_rect.x);
+    let y = i32::from(viewport.y) + i32::from(virtual_rect.y) - i32::from(scroll);
+    let x2 = x + i32::from(virtual_rect.width);
+    let y2 = y + i32::from(virtual_rect.height);
+    let vx2 = i32::from(viewport.x) + i32::from(viewport.width);
+    let vy2 = i32::from(viewport.y) + i32::from(viewport.height);
+    let ix = x.max(i32::from(viewport.x));
+    let iy = y.max(i32::from(viewport.y));
+    let ix2 = x2.min(vx2);
+    let iy2 = y2.min(vy2);
+    if ix2 <= ix || iy2 <= iy {
+        return Rect::default();
+    }
+    Rect {
+        x: ix as u16,
+        y: iy as u16,
+        width: (ix2 - ix) as u16,
+        height: (iy2 - iy) as u16,
+    }
+}
+
+/// Keep `target` (virtual coords) inside a viewport of `view_h` rows.
+pub fn scroll_to_show(scroll: u16, view_h: u16, target: Rect) -> u16 {
+    if target.height == 0 || view_h == 0 {
+        return scroll;
+    }
+    let top = target.y;
+    let bottom = target.y.saturating_add(target.height);
+    if top < scroll {
+        top
+    } else if bottom > scroll.saturating_add(view_h) {
+        bottom.saturating_sub(view_h)
+    } else {
+        scroll
+    }
+}
+
+/// Map a click inside a wrapped text rect to a char index.
+pub fn char_index_at_xy(text: &str, area: Rect, x: u16, y: u16, scroll: u16) -> usize {
+    if area.width == 0 {
+        return text.chars().count();
+    }
+    let width = area.width.max(1);
+    let rel_x = x.saturating_sub(area.x).min(width.saturating_sub(1));
+    let rel_y = y.saturating_sub(area.y);
+    let target_row = scroll.saturating_add(rel_y);
+    let mut row = 0u16;
+    let mut col = 0u16;
+    for (i, ch) in text.chars().enumerate() {
+        if row == target_row && (ch == '\n' || col >= rel_x) {
+            return i;
+        }
+        if row > target_row {
+            return i.saturating_sub(1);
+        }
+        if ch == '\n' {
+            row = row.saturating_add(1);
+            col = 0;
+        } else {
+            col = col.saturating_add(1);
+            if col >= width {
+                row = row.saturating_add(1);
+                col = 0;
+            }
+        }
+    }
+    text.chars().count()
 }
 
 impl LayoutMap {
@@ -299,6 +455,10 @@ impl LayoutMap {
         }
         if contains(self.target_apca, col, row) {
             return Some(Hit::TargetApca);
+        }
+
+        if contains(self.contrast_scrollbar, col, row) {
+            return Some(Hit::ContrastScrollbar);
         }
 
         if contains(self.fg_input, col, row) {
@@ -353,6 +513,9 @@ impl LayoutMap {
         }
         if contains(self.web_btn, col, row) {
             return Some(Hit::WebBtn);
+        }
+        if contains(self.contrast_panel, col, row) {
+            return Some(Hit::ContrastPanel);
         }
 
         if contains(self.generate_btn, col, row) {
@@ -437,6 +600,50 @@ mod tests {
         assert_eq!(char_index_at(area, 5, 8), 0);
         assert_eq!(char_index_at(area, 8, 8), 3);
         assert_eq!(char_index_at(area, 80, 8), 8);
+    }
+
+    #[test]
+    fn caret_line_marks_start_middle_and_end() {
+        let style = Style::default();
+        let caret = Style::default().add_modifier(ratatui::style::Modifier::REVERSED);
+        let start = caret_line("ab", 0, style, caret);
+        assert_eq!(start.spans.len(), 2);
+        assert_eq!(start.spans[0].content, "a");
+        let mid = caret_line("ab", 1, style, caret);
+        assert_eq!(mid.spans[0].content, "a");
+        assert_eq!(mid.spans[1].content, "b");
+        let end = caret_line("ab", 2, style, caret);
+        assert_eq!(end.spans.last().map(|s| s.content.as_ref()), Some(" "));
+    }
+
+    #[test]
+    fn visual_lines_wrap_and_keep_newlines() {
+        assert_eq!(visual_lines("abcdef", 3), vec!["abc", "def"]);
+        assert_eq!(visual_lines("ab\ncd", 10), vec!["ab", "cd"]);
+    }
+
+    #[test]
+    fn char_index_at_xy_hits_second_row() {
+        let area = r(0, 0, 10, 3);
+        let text = "hello\nworld";
+        assert_eq!(char_index_at_xy(text, area, 0, 1, 0), 6);
+        assert_eq!(char_index_at_xy(text, area, 1, 1, 0), 7);
+    }
+
+    #[test]
+    fn visible_rect_clips_scrolled_content() {
+        let viewport = r(2, 3, 40, 10);
+        assert_eq!(visible_rect(r(0, 0, 40, 3), viewport, 0), r(2, 3, 40, 3));
+        assert_eq!(visible_rect(r(0, 0, 40, 3), viewport, 5).height, 0);
+        assert_eq!(visible_rect(r(0, 8, 40, 3), viewport, 5), r(2, 6, 40, 3));
+        assert_eq!(visible_rect(r(0, 0, 40, 3), viewport, 1), r(2, 3, 40, 2));
+    }
+
+    #[test]
+    fn scroll_to_show_brings_target_into_view() {
+        assert_eq!(scroll_to_show(0, 10, r(0, 0, 8, 3)), 0);
+        assert_eq!(scroll_to_show(0, 10, r(0, 12, 8, 3)), 5);
+        assert_eq!(scroll_to_show(8, 10, r(0, 0, 8, 3)), 0);
     }
 
     #[test]

@@ -267,7 +267,7 @@ Italic does not change this table.
 
 ### Conversions
 
-No Conversions tab. The focused color’s hex / rgb / hsl is shown in the scores/detail strip.
+No Conversions tab. The Contrast left column includes a Conversions box under the form (and above stacked WCAG / APCA) showing Hex / RGB / HSL for both foreground and background.
 
 ---
 
@@ -418,11 +418,15 @@ Preview content (minimum):
 
 TUI cannot honor `font_family`; the caption and web preview do.
 
-Scores (minimum):
+Preview chrome uses the same `body_background` as the left column so the title stays readable. The FG/BG sample is inset ~12px (2 columns / 1 row inside the border); sample text has one extra cell of padding.
 
-**WCAG** — ratio 2 decimal places; AA normal/large; AAA normal/large; UI 3:1; pass/fail uses header level + green/red theme tokens.
+When the left column’s natural height (form 23 + conversions 6 + WCAG/APCA tables) exceeds the viewport, the column **scrolls as a unit** instead of shrinking field blocks. Mouse wheel over the left column (except size/weight, which still step), PageUp/PageDown, the edge scrollbar, and Tab (keeps the focused field in view).
 
-**APCA** — signed and absolute Lc; pass/fail vs **header bar**; advisory lookup line; polarity.
+Scores (minimum), stacked under Conversions in the left column:
+
+**WCAG** — current size/weight result (`{size}px {normal|bold} | ratio n.nn`, `needs >= {header+large-text threshold} | PASS/FAIL`); AA normal/large; AAA normal/large; UI 3:1; quick-reference table at 12/14/16/18px using the header level + large-text at that size. Pass/fail uses header level + green/red theme tokens.
+
+**APCA** — current size/weight result (`{size}px {normal|bold} | Lc n.nn`, `needs >= {header bar} | PASS/FAIL`); advisory lookup line (`lookup Lc{n} · polarity`); quick-reference table at 12/14/16/18/24px using lookup thresholds for the current weight. Official pass/fail is the header bar.
 
 ### 9.2 Narrow (Layout E)
 
@@ -597,6 +601,7 @@ struct LayoutMap {
 | Wheel over size / weight | those rects | same as `Ctrl+Up`/`Down` on that focused control (also focuses it) |
 | Wheel over nudge | gauge | ±0.02 L (same as `Ctrl+Up`/`Down` when that gauge is focused) |
 | Wheel over pair list / matrix / detail | list/table/detail | scroll; Shift = faster (3 / 8) |
+| Wheel over Contrast left column | form / conversions / scores / scrollbar | scroll the column; Shift = faster. Size/weight still step. |
 | Click toast | toast | dismiss |
 | Click outside F1/F2 | not `popup_area` | close |
 | Click outside Fix overlay | body \ fix_area | close Fix (Narrow only) |
@@ -615,7 +620,7 @@ Leaving a color field (click another control) runs the same apply/parse path as 
 
 | Key | Action |
 |---|---|
-| `1` / `2` | Contrast / Palette |
+| `1` / `2` | Contrast / Palette. While a text field or palette color is being edited, these type the digits. |
 | `Tab` / `Shift+Tab` | next / prev `FocusId` in the active mode (and Fix controls if open); auto-apply; block on invalid |
 | `Space` | Contrast, not editing: swap FG/BG. Palette, matrix selected: swap text ↔ surface axes |
 | `[` `]` | OKLab L ±0.02 on the focused **color** (FG / BG / role), including when Fix is closed |

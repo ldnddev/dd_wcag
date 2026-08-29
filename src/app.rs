@@ -6,7 +6,7 @@
 
 use crate::color::Color;
 use crate::layout::{Hit, LayoutMap};
-use crate::palette::{generate_palette, parse_palette_color, validate_export, PaletteState};
+use crate::palette::{PaletteState, generate_palette, parse_palette_color, validate_export};
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
 use std::time::{Duration, Instant};
@@ -267,6 +267,9 @@ pub struct App {
     pub hovered: Option<Hit>,
     pub mouse_pos: Option<(u16, u16)>,
     pub scrollbar_dragging: bool,
+    pub contrast_scroll: u16,
+    pub contrast_max_scroll: u16,
+    pub contrast_scroll_focus: Option<FocusId>,
     pub last_mouse_click_pos: Option<(u16, u16, Instant)>,
     pub error: Option<String>,
     pub status: Option<String>,
@@ -318,6 +321,9 @@ impl App {
             hovered: None,
             mouse_pos: None,
             scrollbar_dragging: false,
+            contrast_scroll: 0,
+            contrast_max_scroll: 0,
+            contrast_scroll_focus: None,
             last_mouse_click_pos: None,
             error: None,
             status: None,
@@ -384,7 +390,10 @@ impl App {
             self.weight = 700;
         }
         self.is_bold = self.weight >= 700;
-        self.style_chip = self.active_style_preset().map(StylePreset::index).unwrap_or(self.style_chip);
+        self.style_chip = self
+            .active_style_preset()
+            .map(StylePreset::index)
+            .unwrap_or(self.style_chip);
     }
 
     pub fn swap_colors(&mut self) {
@@ -416,6 +425,11 @@ impl App {
             Mode::Palette => FocusId::Role(0),
         };
         self.sync_focus_input();
+    }
+
+    pub fn scroll_contrast_by(&mut self, delta: i32) {
+        let next = i32::from(self.contrast_scroll) + delta;
+        self.contrast_scroll = next.clamp(0, i32::from(self.contrast_max_scroll)) as u16;
     }
 
     pub fn set_focus(&mut self, focus: FocusId) {

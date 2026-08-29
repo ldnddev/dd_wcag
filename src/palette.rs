@@ -189,7 +189,9 @@ impl PaletteState {
 
     pub fn scroll_detail_by(&mut self, delta: i32) {
         if delta < 0 {
-            self.detail_scroll = self.detail_scroll.saturating_sub(delta.unsigned_abs() as usize);
+            self.detail_scroll = self
+                .detail_scroll
+                .saturating_sub(delta.unsigned_abs() as usize);
         } else {
             self.detail_scroll = self
                 .detail_scroll
@@ -688,11 +690,26 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
             "It drives recognition and hierarchy without locking you into a specific color palette. Swap these tones for any client brand.",
         ],
     );
-    emit_pair(&mut out, tokens, "$c_primary_default", "$c_primary_default--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_primary_default",
+        "$c_primary_default--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_primary_strong", "$c_primary_strong--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_primary_strong",
+        "$c_primary_strong--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_primary_subtle", "$c_primary_subtle--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_primary_subtle",
+        "$c_primary_subtle--dark",
+    );
     emit_blanks(&mut out, 4);
 
     emit_comment(
@@ -703,11 +720,26 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
             "It drives recognition and hierarchy without locking you into a specific color palette. Swap these tones for any client brand.",
         ],
     );
-    emit_pair(&mut out, tokens, "$c_secondary_default", "$c_secondary_default--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_secondary_default",
+        "$c_secondary_default--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_secondary_strong", "$c_secondary_strong--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_secondary_strong",
+        "$c_secondary_strong--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_secondary_subtle", "$c_secondary_subtle--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_secondary_subtle",
+        "$c_secondary_subtle--dark",
+    );
     emit_blanks(&mut out, 4);
 
     emit_comment(
@@ -718,11 +750,26 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
             "It drives recognition and hierarchy without locking you into a specific color palette. Swap these tones for any client brand.",
         ],
     );
-    emit_pair(&mut out, tokens, "$c_tertiary_default", "$c_tertiary_default--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_tertiary_default",
+        "$c_tertiary_default--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_tertiary_strong", "$c_tertiary_strong--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_tertiary_strong",
+        "$c_tertiary_strong--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_tertiary_subtle", "$c_tertiary_subtle--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_tertiary_subtle",
+        "$c_tertiary_subtle--dark",
+    );
     emit_blanks(&mut out, 4);
 
     emit_action(
@@ -745,9 +792,7 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
     );
 
     emit_comment(&mut out, &["Semantic (Status / Feedback / Alerts)"]);
-    for name in [
-        "success", "warning", "error", "info",
-    ] {
+    for name in ["success", "warning", "error", "info"] {
         emit_pair(
             &mut out,
             tokens,
@@ -775,23 +820,58 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
     emit_comment(&mut out, &["Text Roles (Color Mapping)"]);
     emit_pair(&mut out, tokens, "$c_text_primary", "$c_text_primary--dark");
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_text_secondary", "$c_text_secondary--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_text_secondary",
+        "$c_text_secondary--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_text_disabled", "$c_text_disabled--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_text_disabled",
+        "$c_text_disabled--dark",
+    );
     emit_blanks(&mut out, 1);
     emit_pair(&mut out, tokens, "$c_text_inverse", "$c_text_inverse--dark");
     emit_blanks(&mut out, 4);
 
     emit_comment(&mut out, &["Neutrals (Core UI / Backgrounds)"]);
-    emit_pair(&mut out, tokens, "$c_ui_neutral_100", "$c_ui_neutral_100--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_ui_neutral_100",
+        "$c_ui_neutral_100--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_ui_neutral_200", "$c_ui_neutral_200--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_ui_neutral_200",
+        "$c_ui_neutral_200--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_ui_neutral_300", "$c_ui_neutral_300--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_ui_neutral_300",
+        "$c_ui_neutral_300--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_ui_neutral_600", "$c_ui_neutral_600--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_ui_neutral_600",
+        "$c_ui_neutral_600--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_ui_neutral_900", "$c_ui_neutral_900--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_ui_neutral_900",
+        "$c_ui_neutral_900--dark",
+    );
     emit_blanks(&mut out, 3);
 
     emit_comment(
@@ -804,9 +884,19 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
     out.push_str("$c_support_overlay: rgba(0, 0, 0, 0.8);\n");
     out.push_str("$c_support_overlay--dark: rgba(0, 0, 0, 0.8);\n");
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_support_border", "$c_support_border--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_support_border",
+        "$c_support_border--dark",
+    );
     emit_blanks(&mut out, 1);
-    emit_pair(&mut out, tokens, "$c_support_focus", "$c_support_focus--dark");
+    emit_pair(
+        &mut out,
+        tokens,
+        "$c_support_focus",
+        "$c_support_focus--dark",
+    );
     emit_blanks(&mut out, 1);
     emit_pair(
         &mut out,
@@ -997,9 +1087,11 @@ mod tests {
 
         assert!(generated.scss.contains("$c_primary_default: rgba("));
         assert!(generated.scss.contains("$c_primary_action_default_surface"));
-        assert!(generated
-            .scss
-            .contains("$c_text_primary: rgba(28, 30, 33, 1);"));
+        assert!(
+            generated
+                .scss
+                .contains("$c_text_primary: rgba(28, 30, 33, 1);")
+        );
         assert!(generated.scss.contains("$c_support_focus--dark"));
         assert!(generated.scss.contains("Primary (Brand Placeholder)"));
         assert!(generated.scss.contains("$c_support_disabled"));
@@ -1007,7 +1099,11 @@ mod tests {
         assert!(generated.scss.contains("$c_facebook:"));
         assert!(generated.scss.contains("$width_xs: 20.5em"));
         assert!(generated.scss.contains("$max-width: $width_xxl"));
-        assert!(generated.scss.contains("$c_support_overlay: rgba(0, 0, 0, 0.8)"));
+        assert!(
+            generated
+                .scss
+                .contains("$c_support_overlay: rgba(0, 0, 0, 0.8)")
+        );
     }
 
     #[test]
