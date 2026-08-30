@@ -7,6 +7,15 @@ pub enum FixAxis {
     Bg,
 }
 
+impl FixAxis {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fg => "FG",
+            Self::Bg => "BG",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PairVerdict {
     pub ratio: f64,
@@ -109,16 +118,90 @@ impl FixState {
 fn collect_candidates(
     now_fg: Color,
     now_bg: Color,
-    axis: FixAxis,
+    preferred: FixAxis,
     wcag_threshold: f64,
     apca_bar: f64,
 ) -> Vec<(Color, Color)> {
+    let other = match preferred {
+        FixAxis::Fg => FixAxis::Bg,
+        FixAxis::Bg => FixAxis::Fg,
+    };
+    let mut scored: Vec<(u8, u8, f32, Color, Color)> = Vec::new();
+    for (axis_penalty, axis) in [(0_u8, preferred), (1, other)] {
+        scored.extend(
+            collect_axis(now_fg, now_bg, axis, wcag_threshold, apca_bar)
+                .into_iter()
+                .map(|(rank, dist, fg, bg)| (rank, axis_penalty, dist, fg, bg)),
+        );
+    }
+    let has_apca = scored.iter().any(|(rank, _, _, _, _)| *rank <= 1);
+    if !has_apca {
+        // Changing only one axis cannot always reach the APCA bar (e.g. gray on gray).
+        // Hold the other color at black or white and search L again.
+        let extras = match preferred {
+            FixAxis::Fg => [0.0, 1.0]
+                .into_iter()
+                .flat_map(|bg_l| {
+                    collect_axis(
+                        now_fg,
+                        now_bg.with_oklab_l(bg_l),
+                        FixAxis::Fg,
+                        wcag_threshold,
+                        apca_bar,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            FixAxis::Bg => [0.0, 1.0]
+                .into_iter()
+                .flat_map(|fg_l| {
+                    collect_axis(
+                        now_fg.with_oklab_l(fg_l),
+                        now_bg,
+                        FixAxis::Bg,
+                        wcag_threshold,
+                        apca_bar,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        };
+        scored.extend(
+            extras
+                .into_iter()
+                .map(|(rank, dist, fg, bg)| (rank, 2_u8, dist, fg, bg)),
+        );
+    }
+    if scored.is_empty() {
+        return vec![
+            (now_fg.with_oklab_l(0.0), now_bg),
+            (now_fg.with_oklab_l(1.0), now_bg),
+            (now_fg, now_bg.with_oklab_l(0.0)),
+            (now_fg, now_bg.with_oklab_l(1.0)),
+        ];
+    }
+    scored.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    scored
+        .into_iter()
+        .map(|(_, _, _, fg, bg)| (fg, bg))
+        .collect()
+}
+
+fn collect_axis(
+    now_fg: Color,
+    now_bg: Color,
+    axis: FixAxis,
+    wcag_threshold: f64,
+    apca_bar: f64,
+) -> Vec<(u8, f32, Color, Color)> {
     let start = match axis {
         FixAxis::Fg => now_fg,
         FixAxis::Bg => now_bg,
     };
     let l0 = start.oklab_l();
-    let mut scored: Vec<(u8, f32, Color, Color)> = Vec::new();
+    let mut scored = Vec::new();
     for i in 0..=50 {
         let l = i as f32 / 50.0;
         if (l - l0).abs() < 0.008 {
@@ -132,31 +215,16 @@ fn collect_candidates(
         let verdict = PairVerdict::of(fg, bg, wcag_threshold, apca_bar);
         let rank = if verdict.wcag && verdict.apca {
             0
-        } else if verdict.wcag || verdict.apca {
+        } else if verdict.apca {
             1
+        } else if verdict.wcag {
+            2
         } else {
             continue;
         };
         scored.push((rank, (l - l0).abs(), fg, bg));
     }
-    if scored.is_empty() {
-        let lo = start.with_oklab_l(0.0);
-        let hi = start.with_oklab_l(1.0);
-        let (fg_lo, bg_lo) = match axis {
-            FixAxis::Fg => (lo, now_bg),
-            FixAxis::Bg => (now_fg, lo),
-        };
-        let (fg_hi, bg_hi) = match axis {
-            FixAxis::Fg => (hi, now_bg),
-            FixAxis::Bg => (now_fg, hi),
-        };
-        return vec![(fg_lo, bg_lo), (fg_hi, bg_hi)];
-    }
-    scored.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    scored.into_iter().map(|(_, _, fg, bg)| (fg, bg)).collect()
+    scored
 }
 
 #[cfg(test)]
@@ -171,7 +239,11 @@ mod tests {
         fix.search(gray, gray, 4.5, 75.0);
         assert!(!fix.candidates.is_empty());
         let v = PairVerdict::of(fix.candidate_fg, fix.candidate_bg, 4.5, 75.0);
-        assert!(v.wcag || v.apca, "expected at least one metric to pass");
+        assert!(
+            v.apca,
+            "Fix should meet the APCA bar when black/white L can"
+        );
+        assert!(v.wcag);
     }
 
     #[test]

@@ -31,6 +31,28 @@ impl PaletteInput {
     pub fn required(self) -> bool {
         !matches!(self, Self::Support)
     }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Primary => 0,
+            Self::Secondary => 1,
+            Self::Tertiary => 2,
+            Self::Support => 3,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        Self::ALL[i.min(Self::ALL.len() - 1)]
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Primary => "Pri",
+            Self::Secondary => "Sec",
+            Self::Tertiary => "Ter",
+            Self::Support => "Sup",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +157,16 @@ impl PaletteState {
         self.editing = false;
         self.edit_input.clear();
         self.edit_cursor_char_idx = 0;
+    }
+
+    pub fn set_role_hex(&mut self, input: PaletteInput, hex: String) {
+        *self.input_for_mut(input) = hex;
+        self.selected_idx = input.index();
+        self.generated = None;
+        self.detail_scroll = 0;
+        self.editing = false;
+        self.edit_input.clear();
+        self.pending_apply = None;
     }
 
     pub fn commit_edit(&mut self) {
@@ -386,8 +418,12 @@ fn push_action_tokens(tokens: &mut Vec<PaletteToken>, family: &str, base: Color)
         ),
         (
             "disabled",
-            adjust_lightness(base, 0.82),
-            adjust_lightness(base, 0.30),
+            ensure_contrast(adjust_lightness(base, 0.82), fixed_text_disabled(), 3.0),
+            ensure_contrast(
+                adjust_lightness(base, 0.30),
+                fixed_text_disabled_dark(),
+                3.0,
+            ),
         ),
     ] {
         let light_text = if state == "disabled" {
@@ -448,18 +484,22 @@ fn push_support_tokens(tokens: &mut Vec<PaletteToken>, base: Color) {
     push_token(
         tokens,
         "$c_support_border",
-        Color::parse_hex("#E0E3E7").expect("support border"),
+        ensure_non_text_contrast(adjust_lightness(base, 0.42), neutral_100()),
     );
     push_token(
         tokens,
         "$c_support_border--dark",
-        Color::parse_hex("#2A2D31").expect("support border dark"),
+        ensure_non_text_contrast(adjust_lightness(base, 0.55), neutral_100_dark()),
     );
-    push_token(tokens, "$c_support_focus", base);
+    push_token(
+        tokens,
+        "$c_support_focus",
+        ensure_non_text_contrast(base, neutral_100()),
+    );
     push_token(
         tokens,
         "$c_support_focus--dark",
-        adjust_lightness(base, 0.72),
+        ensure_non_text_contrast(adjust_lightness(base, 0.72), neutral_100_dark()),
     );
     push_token(tokens, "$c_support_disabled", fixed_text_disabled());
     push_token(
@@ -583,11 +623,12 @@ fn build_checks(tokens: &[PaletteToken]) -> Vec<ComplianceCheck> {
                     find_token(tokens, &text_name),
                 ) {
                     let ratio = text.color.contrast_ratio(&surface.color);
+                    let threshold = if state == "disabled" { 3.0 } else { 4.5 };
                     checks.push(ComplianceCheck {
                         label: format!("{text_name} on {surface_name}"),
                         ratio,
-                        threshold: 4.5,
-                        passes: ratio >= 4.5,
+                        threshold,
+                        passes: ratio >= threshold,
                         blocking: state != "disabled",
                     });
                 }
@@ -1136,6 +1177,23 @@ mod tests {
                 .map(|check| format!("{} {:.2}/{:.1}", check.label, check.ratio, check.threshold))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn support_chrome_and_disabled_text_meet_ui_floors() {
+        let generated = generate_palette(&PaletteState::default()).expect("palette generates");
+        for check in &generated.checks {
+            let support_chrome = check.label.contains("support_border")
+                || check.label.contains("support_focus");
+            let disabled_text = check.label.contains("action_disabled_text");
+            if support_chrome || disabled_text {
+                assert!(
+                    check.passes,
+                    "{} {:.2}/{:.1}",
+                    check.label, check.ratio, check.threshold
+                );
+            }
+        }
     }
 
     #[test]

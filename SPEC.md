@@ -513,6 +513,8 @@ detail    Length(6)   preview + numbers + tokens
 
 Apply writes the candidate back into the active pair: Contrast FG/BG, or the two palette **bases** involved (never into a fixed text token — if the pair is `Text on Primary`, only Primary may change). Next generates another nearby candidate (OKLab L first; hue only if `keep_hue` is off or lightness cannot pass).
 
+FIXED FG and BG can be sent independently to Palette **Primary / Secondary / Tertiary / Support** (`FG→` / `BG→` chips, or `p` / `s` / `t` / `u` for the focused axis). That writes the hex into the role, clears generated output, and does not change Contrast unless Apply was used.
+
 ### 11.2 Narrow — overlay
 
 Centered ~80% box. Render order: tab content, `Clear` overlay, Fix stacked: NOW, FIXED, sliders, buttons. Click outside `fix_area` closes. Esc closes Fix (or help/theme debug if those are on top).
@@ -656,7 +658,7 @@ One chord, meaning depends on `focus`:
 
 Mouse `−` / `+` on a row, and wheel over that row, perform the same steps and set focus to that control. Do not also bind `-` / `+` / `=` as global size keys (they collide with typing in hex/`rgb()`).
 
-Focus order — Contrast: `FgHex → BgHex → Size → Weight → Style → PreviewText → FontFamily → Swap → CopyHex → FixBtn → OpenPreview` then Fix if open (`NudgeFg → NudgeBg → ApplyFix → NextFix → CloseFix`).
+Focus order — Contrast: `FgHex → BgHex → Size → Weight → Style → PreviewText → FontFamily → Swap → CopyHex → FixBtn → OpenPreview` then Fix if open (`NudgeFg → NudgeBg → ApplyFix → NextFix → CloseFix → SendFg → SendBg`).
 
 Focus order — Palette: `Role(0..3) → Generate → Matrix → Detail` then Fix if open. Size/weight on Palette are the shared controls; include them in the cycle after Support.
 

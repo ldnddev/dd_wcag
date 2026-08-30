@@ -203,9 +203,9 @@ fn render_fix(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap, ove
     let inner = area.inner(ratatui::layout::Margin::new(1, 1));
     let (now, fixed, nudge) = if overlay || inner.height >= 12 {
         let [now, fixed, nudge] = Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Min(4),
+            Constraint::Length(5),
+            Constraint::Length(5),
+            Constraint::Min(6),
         ])
         .areas(inner);
         (now, fixed, nudge)
@@ -246,12 +246,14 @@ fn render_fix(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap, ove
         ),
     );
 
-    let [fg_row, bg_row, btn_row] = Layout::vertical([
+    let [fg_row, bg_row, btn_row, send_fg_row, send_bg_row] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
-    .areas(nudge.inner(ratatui::layout::Margin::new(0, 0)));
+    .areas(nudge);
     map.nudge_fg = paint_l_gauge(
         frame,
         app,
@@ -281,6 +283,9 @@ fn render_fix(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap, ove
     paint_fix_button(frame, app, apply, "Apply", app.focus == FocusId::ApplyFix);
     paint_fix_button(frame, app, next, "Next", app.focus == FocusId::NextFix);
     paint_fix_button(frame, app, close, "Close", app.focus == FocusId::CloseFix);
+
+    map.send_fg = paint_send_row(frame, app, send_fg_row, "FG→", app.focus == FocusId::SendFg);
+    map.send_bg = paint_send_row(frame, app, send_bg_row, "BG→", app.focus == FocusId::SendBg);
 }
 
 fn paint_fix_pair(
@@ -305,16 +310,29 @@ fn paint_fix_pair(
     );
     let inner = area.inner(ratatui::layout::Margin::new(1, 1));
     let sample_style = fg.to_style().bg(bg.to_tui_color());
-    let mark_style = match verdict.label() {
-        "PASS" => Style::default().fg(app.theme.success_color()),
-        "FAIL" => Style::default().fg(app.theme.error_color()),
-        _ => Style::default().fg(app.theme.warning_color()),
+    let (wcag_th, apca_bar) = app.contrast_thresholds();
+    let polarity = if verdict.lc >= 0.0 {
+        "light text"
+    } else {
+        "dark text"
     };
     let lines = vec![
         Line::styled(format!("{} on {}", fg.to_hex(), bg.to_hex()), sample_style),
         Line::from(vec![
-            Span::raw(format!("{:.2}:1 Lc {:+.0} ", verdict.ratio, verdict.lc)),
-            Span::styled(verdict.label(), mark_style),
+            Span::raw(format!(
+                "WCAG {:.2}:1 {} ≥{wcag_th} ",
+                verdict.ratio,
+                app.targets.wcag.label()
+            )),
+            metric_mark(app, verdict.wcag),
+        ]),
+        Line::from(vec![
+            Span::raw(format!(
+                "APCA Lc {:+.0} {} ≥{apca_bar:.0} · {polarity} ",
+                verdict.lc,
+                app.targets.apca.label()
+            )),
+            metric_mark(app, verdict.apca),
         ]),
     ];
     frame.render_widget(
@@ -325,6 +343,14 @@ fn paint_fix_pair(
         ),
         inner,
     );
+}
+
+fn metric_mark(app: &App, pass: bool) -> Span<'static> {
+    if pass {
+        Span::styled("PASS", Style::default().fg(app.theme.success_color()))
+    } else {
+        Span::styled("FAIL", Style::default().fg(app.theme.error_color()))
+    }
 }
 
 fn paint_l_gauge(
@@ -361,6 +387,48 @@ fn paint_l_gauge(
         bar,
     );
     bar
+}
+
+fn paint_send_row(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    label: &str,
+    row_focused: bool,
+) -> [Rect; 4] {
+    let [lab, chips_area] =
+        Layout::horizontal([Constraint::Length(4), Constraint::Fill(1)]).areas(area);
+    let label_style = if row_focused {
+        Style::default().fg(app.theme.text_active_focus_color())
+    } else {
+        Style::default().fg(app.theme.text_labels_color())
+    };
+    frame.render_widget(Paragraph::new(label).style(label_style), lab);
+    let chips: [Rect; 4] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+    ])
+    .areas(chips_area);
+    for (i, role) in crate::palette::PaletteInput::ALL.iter().enumerate() {
+        let selected = row_focused && app.fix_send_chip == i;
+        let mut style = if selected {
+            Style::default()
+                .fg(app.theme.text_active_focus_color())
+                .bg(app.theme.selected_background_color())
+                .add_modifier(Modifier::BOLD)
+        } else if row_focused {
+            Style::default().fg(app.theme.text_secondary_color())
+        } else {
+            Style::default().fg(app.theme.text_secondary_color())
+        };
+        if selected {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        frame.render_widget(Paragraph::new(role.short_label()).style(style), chips[i]);
+    }
+    chips
 }
 
 fn paint_fix_button(frame: &mut Frame, app: &App, area: Rect, label: &str, focused: bool) {
@@ -609,18 +677,25 @@ fn render_palette_detail(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
         lines.push(Line::from(""));
         lines.push(Line::from("Compliance checks:"));
         for check in &generated.checks {
+            let (tag, color) = if check.passes {
+                ("PASS ", app.theme.success_color())
+            } else if check.blocking {
+                ("FAIL ", app.theme.error_color())
+            } else {
+                ("WARN ", app.theme.warning_color())
+            };
             lines.push(Line::from(vec![
-                Span::styled(
-                    if check.passes { "PASS " } else { "FAIL " },
-                    Style::default().fg(if check.passes {
-                        app.theme.success_color()
-                    } else {
-                        app.theme.error_color()
-                    }),
-                ),
+                Span::styled(tag, Style::default().fg(color)),
                 Span::raw(format!(
-                    "{:.2}:1 >= {:.1}:1 {}",
-                    check.ratio, check.threshold, check.label
+                    "{:.2}:1 >= {:.1}:1 {}{}",
+                    check.ratio,
+                    check.threshold,
+                    check.label,
+                    if check.blocking || check.passes {
+                        ""
+                    } else {
+                        " (advisory)"
+                    }
                 )),
             ]));
         }
@@ -866,6 +941,9 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Ctrl+C: copy focused hex   Ctrl+F: toggle Fix pane   Ctrl+O: web preview"),
         Line::from(
             "Fix: Ctrl+N next candidate  Enter Apply/Next/Close  [ ] nudge OKLab L  drag gauges",
+        ),
+        Line::from(
+            "Fix → Palette: FG→ / BG→ chips set Pri/Sec/Ter/Sup. p/s/t/u send the focused axis",
         ),
         Line::from("PageUp / PageDown: scroll the left column when it does not fit"),
         Line::from("Mouse wheel over the left column: scroll (size/weight still step)"),

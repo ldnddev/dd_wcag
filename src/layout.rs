@@ -33,8 +33,8 @@ impl Breakpoint {
 
     pub fn fix_strip_height(self) -> Option<u16> {
         match self {
-            Self::Wide => Some(7),
-            Self::Medium => Some(6),
+            Self::Wide => Some(11),
+            Self::Medium => Some(11),
             Self::Narrow => None,
         }
     }
@@ -173,6 +173,8 @@ pub enum Hit {
     DetailScrollbar,
     NudgeFg,
     NudgeBg,
+    SendFg(usize),
+    SendBg(usize),
     ApplyFix,
     NextFix,
     CloseFix,
@@ -227,6 +229,8 @@ pub struct LayoutMap {
     pub fixed_area: Rect,
     pub nudge_fg: Rect,
     pub nudge_bg: Rect,
+    pub send_fg: [Rect; 4],
+    pub send_bg: [Rect; 4],
     pub apply_btn: Rect,
     pub next_btn: Rect,
     pub close_fix: Rect,
@@ -435,6 +439,16 @@ impl LayoutMap {
             }
             if contains(self.nudge_bg, col, row) {
                 return Some(Hit::NudgeBg);
+            }
+            for (i, rect) in self.send_fg.iter().enumerate() {
+                if contains(*rect, col, row) {
+                    return Some(Hit::SendFg(i));
+                }
+            }
+            for (i, rect) in self.send_bg.iter().enumerate() {
+                if contains(*rect, col, row) {
+                    return Some(Hit::SendBg(i));
+                }
             }
             if matches!(self.breakpoint, Breakpoint::Narrow)
                 && contains(self.body, col, row)
@@ -650,7 +664,7 @@ mod tests {
     fn wide_fix_split_steals_a_bottom_strip() {
         let body = r(0, 3, 120, 24);
         let (main, fix) = split_body_with_fix(body, Breakpoint::Wide, true);
-        assert_eq!(fix.map(|a| a.height), Some(7));
+        assert_eq!(fix.map(|a| a.height), Some(11));
         assert_eq!(main.height + fix.unwrap().height, 24);
         let (main_closed, fix_closed) = split_body_with_fix(body, Breakpoint::Wide, false);
         assert!(fix_closed.is_none());

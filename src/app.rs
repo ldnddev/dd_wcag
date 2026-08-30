@@ -7,7 +7,9 @@
 use crate::color::{Color, is_large_text};
 use crate::fix::{FixAxis, FixState};
 use crate::layout::{Hit, LayoutMap};
-use crate::palette::{PaletteState, generate_palette, parse_palette_color, validate_export};
+use crate::palette::{
+    PaletteInput, PaletteState, generate_palette, parse_palette_color, validate_export,
+};
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
 use std::time::{Duration, Instant};
@@ -117,6 +119,8 @@ pub enum FocusId {
     Detail,
     NudgeFg,
     NudgeBg,
+    SendFg,
+    SendBg,
     ApplyFix,
     NextFix,
     CloseFix,
@@ -170,6 +174,8 @@ impl FocusId {
             FocusId::ApplyFix,
             FocusId::NextFix,
             FocusId::CloseFix,
+            FocusId::SendFg,
+            FocusId::SendBg,
         ]
     }
 }
@@ -265,6 +271,7 @@ pub struct App {
     pub fix_open: bool,
     pub fix: FixState,
     pub nudge_dragging: Option<FixAxis>,
+    pub fix_send_chip: usize,
     pub targets: Targets,
     pub layout: LayoutMap,
     pub hovered: Option<Hit>,
@@ -321,6 +328,7 @@ impl App {
             fix_open: false,
             fix: FixState::default(),
             nudge_dragging: None,
+            fix_send_chip: 0,
             targets: Targets::default(),
             layout: LayoutMap::default(),
             hovered: None,
@@ -469,6 +477,8 @@ impl App {
             self.focus,
             FocusId::NudgeFg
                 | FocusId::NudgeBg
+                | FocusId::SendFg
+                | FocusId::SendBg
                 | FocusId::ApplyFix
                 | FocusId::NextFix
                 | FocusId::CloseFix
@@ -522,6 +532,33 @@ impl App {
             FixAxis::Bg => FocusId::NudgeBg,
         };
         self.editing = false;
+    }
+
+    pub fn move_fix_send_chip(&mut self, delta: i32) {
+        let next = i32::from(self.fix_send_chip as u16) + delta;
+        self.fix_send_chip = next.clamp(0, 3) as usize;
+    }
+
+    pub fn send_fixed_to_role(&mut self, axis: FixAxis, role: PaletteInput) {
+        if !self.fix_open {
+            return;
+        }
+        let color = match axis {
+            FixAxis::Fg => self.fix.candidate_fg,
+            FixAxis::Bg => self.fix.candidate_bg,
+        };
+        let hex = color.to_hex();
+        self.palette.set_role_hex(role, hex.clone());
+        self.fix_send_chip = role.index();
+        self.notify_status(format!("FIXED {} {hex} → {}", axis.label(), role.label()));
+    }
+
+    pub fn send_fixed_selected_chip(&mut self) {
+        let axis = match self.focus {
+            FocusId::SendBg | FocusId::NudgeBg => FixAxis::Bg,
+            _ => FixAxis::Fg,
+        };
+        self.send_fixed_to_role(axis, PaletteInput::from_index(self.fix_send_chip));
     }
 
     pub fn set_fix_l_from_x(&mut self, axis: FixAxis, x: u16, gauge: ratatui::layout::Rect) {

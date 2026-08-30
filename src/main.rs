@@ -28,6 +28,7 @@ use app::{App, FocusId, Mode, StylePreset};
 use fix::FixAxis;
 use layout::{Hit, char_index_at, char_index_at_xy, view_scroll, visual_cursor};
 use palette::PALETTE_EXPORT_PATH;
+use palette::PaletteInput;
 use theme::Theme;
 
 fn main() -> Result<()> {
@@ -215,6 +216,8 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             if app.focus == FocusId::Style {
                 app.move_style_chip(-1);
                 effects.sync_preview = true;
+            } else if matches!(app.focus, FocusId::SendFg | FocusId::SendBg) {
+                app.move_fix_send_chip(-1);
             } else if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.move_cursor_left();
             } else if app.focus.is_text_field() {
@@ -225,6 +228,8 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             if app.focus == FocusId::Style {
                 app.move_style_chip(1);
                 effects.sync_preview = true;
+            } else if matches!(app.focus, FocusId::SendFg | FocusId::SendBg) {
+                app.move_fix_send_chip(1);
             } else if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.move_cursor_right();
             } else if app.focus.is_text_field() {
@@ -232,7 +237,9 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             }
         }
         KeyCode::Enter => {
-            if app.mode == Mode::Palette {
+            if matches!(app.focus, FocusId::SendFg | FocusId::SendBg) {
+                app.send_fixed_selected_chip();
+            } else if app.mode == Mode::Palette {
                 if app.palette.editing {
                     app.palette.commit_edit();
                 } else if matches!(app.focus, FocusId::Role(_)) || app.focus == FocusId::Generate {
@@ -290,6 +297,8 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             } else if app.focus == FocusId::Style {
                 app.move_style_chip(-1);
                 effects.sync_preview = true;
+            } else if app.focus == FocusId::SendBg {
+                app.set_focus(FocusId::SendFg);
             } else if app.focus == FocusId::Detail {
                 app.palette.scroll_detail_by(if shift { -8 } else { -1 });
             } else if app.mode == Mode::Palette && !app.palette.editing {
@@ -305,6 +314,8 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             } else if app.focus == FocusId::Style {
                 app.move_style_chip(1);
                 effects.sync_preview = true;
+            } else if app.focus == FocusId::SendFg {
+                app.set_focus(FocusId::SendBg);
             } else if app.focus == FocusId::Detail {
                 app.palette.scroll_detail_by(if shift { 8 } else { 1 });
             } else if app.mode == Mode::Palette && !app.palette.editing {
@@ -363,6 +374,19 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             if app.show_keybindings || app.show_theme_debug {
                 return effects;
             }
+            if app.fix_open && !is_typing(app) {
+                if let Some(role) = palette_role_from_key(c) {
+                    if is_fix_focus(app) {
+                        let axis = if matches!(app.focus, FocusId::NudgeBg | FocusId::SendBg) {
+                            FixAxis::Bg
+                        } else {
+                            FixAxis::Fg
+                        };
+                        app.send_fixed_to_role(axis, role);
+                        return effects;
+                    }
+                }
+            }
             if app.mode == Mode::Palette && app.palette.editing {
                 app.palette.insert_char_at_cursor(c);
                 return effects;
@@ -387,6 +411,29 @@ fn is_typing(app: &App) -> bool {
 
 fn is_fix_nudge_focus(app: &App) -> bool {
     matches!(app.focus, FocusId::NudgeFg | FocusId::NudgeBg)
+}
+
+fn is_fix_focus(app: &App) -> bool {
+    matches!(
+        app.focus,
+        FocusId::NudgeFg
+            | FocusId::NudgeBg
+            | FocusId::SendFg
+            | FocusId::SendBg
+            | FocusId::ApplyFix
+            | FocusId::NextFix
+            | FocusId::CloseFix
+    )
+}
+
+fn palette_role_from_key(c: char) -> Option<PaletteInput> {
+    match c {
+        'p' | 'P' => Some(PaletteInput::Primary),
+        's' | 'S' => Some(PaletteInput::Secondary),
+        't' | 'T' => Some(PaletteInput::Tertiary),
+        'u' | 'U' => Some(PaletteInput::Support),
+        _ => None,
+    }
 }
 
 fn fix_nudge_axis(app: &App) -> FixAxis {
@@ -679,6 +726,16 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> KeyEffects {
                     app.set_focus(FocusId::NudgeBg);
                     app.nudge_dragging = Some(FixAxis::Bg);
                     app.set_fix_l_from_x(FixAxis::Bg, col, app.layout.nudge_bg);
+                }
+                Hit::SendFg(i) => {
+                    app.fix_send_chip = i.min(3);
+                    app.set_focus(FocusId::SendFg);
+                    app.send_fixed_to_role(FixAxis::Fg, PaletteInput::from_index(i));
+                }
+                Hit::SendBg(i) => {
+                    app.fix_send_chip = i.min(3);
+                    app.set_focus(FocusId::SendBg);
+                    app.send_fixed_to_role(FixAxis::Bg, PaletteInput::from_index(i));
                 }
                 Hit::WebBtn => {
                     app.set_focus(FocusId::OpenPreview);
@@ -1109,6 +1166,27 @@ mod tests {
     }
 
     #[test]
+    fn fix_tab_order_is_gauges_then_buttons_then_send() {
+        let mut app = App::new();
+        app.set_focus(FocusId::Swap);
+        assert!(try_apply_active_input(&mut app));
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(app.focus, FocusId::NudgeFg);
+        let expected = [
+            FocusId::NudgeBg,
+            FocusId::ApplyFix,
+            FocusId::NextFix,
+            FocusId::CloseFix,
+            FocusId::SendFg,
+            FocusId::SendBg,
+        ];
+        for focus in expected {
+            handle_key_event(&mut app, key(KeyCode::Tab, KeyModifiers::NONE));
+            assert_eq!(app.focus, focus);
+        }
+    }
+
+    #[test]
     fn ctrl_f_toggles_fix() {
         let mut app = App::new();
         handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
@@ -1153,6 +1231,28 @@ mod tests {
         if app.fix.candidate_count() > 1 {
             assert_ne!(app.fix.candidate_fg.to_hex(), first);
         }
+    }
+
+    #[test]
+    fn fix_sends_fg_and_bg_to_palette_roles() {
+        let mut app = App::new();
+        gray_on_gray(&mut app);
+        app.generate_palette();
+        assert!(app.palette.generated.is_some());
+        handle_key_event(&mut app, key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let fg = app.fix.candidate_fg.to_hex();
+        let bg = app.fix.candidate_bg.to_hex();
+        handle_key_event(&mut app, key(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(app.palette.primary_input, fg);
+        app.set_focus(FocusId::NudgeBg);
+        handle_key_event(&mut app, key(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_eq!(app.palette.secondary_input, bg);
+        app.set_focus(FocusId::SendFg);
+        app.fix_send_chip = 2;
+        handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.palette.tertiary_input, fg);
+        assert!(app.palette.generated.is_none());
+        assert_eq!(app.palette.selected_idx, 2);
     }
 
     #[test]
