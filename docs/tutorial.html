@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>dd_wcag tutorial — setup, install, and usage</title>
+  <style>
+    :root {
+      --bg: #0f1114;
+      --surface: #1c1e21;
+      --surface-2: #2a2d31;
+      --text: #f5f6f7;
+      --muted: #c5c9ce;
+      --label: #ffaf46;
+      --accent: #64b4f5;
+      --accent-2: #ffa087;
+      --success: #82e0aa;
+      --error: #e57373;
+      --border: #4a5058;
+      --focus: #64b4f5;
+      --kbd-bg: #0f1114;
+      --content: 46rem;
+      --wide: 72rem;
+      --radius: 10px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+
+    html, body { overflow-x: hidden; }
+
+    body {
+      margin: 0;
+      font-family: "Iosevka Aile", "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      font-size: 1.05rem;
+    }
+
+    a { color: var(--accent); }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible,
+    button:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    .skip {
+      position: absolute;
+      left: 0.75rem;
+      top: -3rem;
+      background: var(--accent);
+      color: #0f1114;
+      padding: 0.5rem 0.85rem;
+      font-weight: 700;
+      border-radius: 6px;
+      z-index: 10;
+    }
+    .skip:focus { top: 0.75rem; }
+
+    header.hero {
+      border-bottom: 1px solid var(--border);
+      background:
+        radial-gradient(900px 280px at 10% -20%, #64b4f533, transparent 60%),
+        radial-gradient(700px 240px at 90% 0%, #ffaf4626, transparent 55%),
+        var(--bg);
+      padding: 2.5rem 1.25rem 2rem;
+    }
+
+    .hero-inner,
+    .wrap {
+      max-width: var(--wide);
+      margin: 0 auto;
+    }
+
+    .hero-inner { max-width: var(--content); }
+
+    .eyebrow {
+      color: var(--label);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+      margin: 0 0 0.6rem;
+    }
+
+    h1 {
+      font-size: clamp(2rem, 4vw, 2.7rem);
+      line-height: 1.15;
+      margin: 0 0 0.75rem;
+    }
+
+    .lede {
+      font-size: 1.15rem;
+      color: var(--muted);
+      margin: 0 0 1.25rem;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.55rem 0.9rem;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 650;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    .btn.primary {
+      background: var(--accent);
+      color: #0f1114;
+      border-color: var(--accent);
+    }
+
+    nav.toc {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.25rem 1.2rem;
+    }
+
+    nav.toc h2 {
+      font-size: 0.95rem;
+      margin: 0 0 0.6rem;
+      color: var(--label);
+    }
+
+    nav.toc ol {
+      columns: 2;
+      gap: 1.5rem;
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+
+    @media (max-width: 720px) {
+      nav.toc ol { columns: 1; }
+    }
+
+    nav.toc a { text-decoration: none; }
+    nav.toc a:hover { text-decoration: underline; }
+
+    main {
+      padding: 0 1.25rem 4rem;
+    }
+
+    section {
+      max-width: var(--content);
+      margin: 0 auto;
+      padding-top: 2.4rem;
+    }
+
+    h2 {
+      font-size: 1.65rem;
+      margin: 0 0 0.7rem;
+      color: var(--text);
+    }
+
+    h3 {
+      font-size: 1.2rem;
+      margin: 1.6rem 0 0.5rem;
+      color: var(--label);
+    }
+
+    p { margin: 0 0 1rem; }
+
+    ul, ol { margin: 0 0 1rem; padding-left: 1.25rem; }
+    li { margin: 0.25rem 0; }
+
+    kbd {
+      font-family: ui-monospace, "JetBrains Mono", "Iosevka", "Cascadia Code", monospace;
+      font-size: 0.82em;
+      background: var(--kbd-bg);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 0.05rem 0.38rem;
+      white-space: nowrap;
+    }
+
+    code, pre {
+      font-family: ui-monospace, "JetBrains Mono", "Iosevka", "Cascadia Code", monospace;
+    }
+
+    code {
+      font-size: 0.92em;
+      background: var(--surface-2);
+      padding: 0.05rem 0.32rem;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.9rem 1rem;
+      overflow-x: auto;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    pre code {
+      background: transparent;
+      padding: 0;
+    }
+
+    figure {
+      margin: 1.2rem 0 1.6rem;
+      max-width: var(--wide);
+    }
+
+    figure.wide {
+      margin-left: calc(50% - 50vw + 1.25rem);
+      margin-right: calc(50% - 50vw + 1.25rem);
+    }
+
+    @media (min-width: 1100px) {
+      figure.wide {
+        margin-left: -8rem;
+        margin-right: -8rem;
+      }
+    }
+
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    figcaption {
+      color: var(--muted);
+      font-size: 0.92rem;
+      margin-top: 0.5rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 1.2rem;
+      font-size: 0.98rem;
+    }
+
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 0.45rem 0.55rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      color: var(--label);
+      font-weight: 700;
+    }
+
+    .callout {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin: 0 0 1.2rem;
+    }
+
+    .callout.warn { border-left-color: var(--label); }
+    .callout.ok { border-left-color: var(--success); }
+    .callout h3 { margin-top: 0; }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 1.4rem 1.25rem 2.2rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    footer .wrap { max-width: var(--content); }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to tutorial</a>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">ldnddev · dd_wcag 0.4</p>
+      <h1>Setup, install, and use dd_wcag</h1>
+      <p class="lede">
+        A terminal contrast checker and SCSS palette builder. Check one foreground/background pair
+        against WCAG 2.x and APCA, then generate a WCAG-gated <code>_palette.scss</code> from brand colors.
+      </p>
+      <div class="hero-actions">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn" href="#contrast">Contrast walkthrough</a>
+        <a class="btn" href="#palette">Palette builder</a>
+        <a class="btn" href="#images">Update screenshots</a>
+      </div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="On this page">
+    <div class="wrap">
+      <h2>On this page</h2>
+      <ol>
+        <li><a href="#requirements">Requirements</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#first-run">First run</a></li>
+        <li><a href="#contrast">Contrast tab</a></li>
+        <li><a href="#fail-fix">Fails and the Fix pane</a></li>
+        <li><a href="#web">Browser preview</a></li>
+        <li><a href="#palette">Palette builder</a></li>
+        <li><a href="#theme">Theming</a></li>
+        <li><a href="#keys">Keyboard and mouse</a></li>
+        <li><a href="#uninstall">Uninstall</a></li>
+        <li><a href="#images">Updating tutorial images</a></li>
+      </ol>
+    </div>
+  </nav>
+
+  <main id="main">
+    <section id="requirements">
+      <h2>Requirements</h2>
+      <ul>
+        <li>A truecolor terminal (foot, kitty, Alacritty, Ghostty, WezTerm, and similar).</li>
+        <li><a href="https://rustup.rs">Rust / cargo</a> to build from source.</li>
+        <li>Optional: a clipboard helper (<code>wl-copy</code>, <code>xclip</code>, <code>xsel</code>, <code>pbcopy</code>, or <code>clip</code>) so <kbd>Ctrl</kbd>+<kbd>C</kbd> can copy hex or SCSS.</li>
+        <li>Optional: a graphical session so <kbd>Ctrl</kbd>+<kbd>O</kbd> can open the CSS preview in a browser.</li>
+      </ul>
+      <p>
+        Put <code>~/.local/bin</code> on <code>PATH</code> if you use the installer. That is the default install prefix.
+      </p>
+    </section>
+
+    <section id="install">
+      <h2>Install</h2>
+
+      <h3>From this checkout</h3>
+      <pre><code>./install.sh</code></pre>
+      <p>The installer:</p>
+      <ul>
+        <li>Builds <code>dd_wcag</code> in release mode.</li>
+        <li>Installs the binary to <code>~/.local/bin/dd_wcag</code>.</li>
+        <li>Copies <code>dd_wcag_theme.yml</code> to <code>~/.config/ldnddev/</code> only if that file is missing (it will not overwrite your theme).</li>
+      </ul>
+
+      <h3>By cloning the repo</h3>
+      <pre><code>./install.sh --repo https://github.com/ldnddev/dd_wcag.git --branch master</code></pre>
+      <p>
+        Extra flags: <code>--prefix DIR</code> (binary destination) and <code>--config-dir DIR</code> (theme destination).
+      </p>
+
+      <h3>Run without installing</h3>
+      <pre><code>cargo run
+# or
+cargo build --release
+./target/release/dd_wcag</code></pre>
+    </section>
+
+    <section id="first-run">
+      <h2>First run</h2>
+      <p>
+        Launch <code>dd_wcag</code>. A bottom-right toast reports which theme loaded (local, global, or built-in) and disappears after five seconds. The app opens on the <strong>Contrast</strong> tab with black text on white, 16px, weight 400.
+      </p>
+      <figure class="wide">
+        <img src="images/contrast.png" width="1600" height="1000" alt="dd_wcag Contrast tab on first launch. Left column has FG #000000, BG #ffffff, size 16, weight 400, Regular style, preview text, font Roboto, Swap Copy Fix Web actions, hex/rgb/hsl conversions, and WCAG plus APCA score tables that both show PASS. Right column is a white preview sample with black heading and body text.">
+        <figcaption>Default Contrast tab. Left: inputs, conversions, WCAG and APCA. Right: approximate TUI preview.</figcaption>
+      </figure>
+      <p>
+        Two tabs sit in the header: <strong>Contrast</strong> and <strong>Palette</strong>. Press <kbd>1</kbd> / <kbd>2</kbd>, or click the labels. The header also holds the WCAG target (<code>AA</code> or <code>AAA</code>) and the APCA pass bar (<code>Lc45</code>, <code>Lc60</code>, <code>Lc75</code>, <code>Lc90</code>). Click either control to cycle it. Those targets change official pass/fail; they do not change the numbers themselves.
+      </p>
+      <p>
+        Quit with <kbd>Ctrl</kbd>+<kbd>Q</kbd>. <kbd>Esc</kbd> never quits — it blurs an editor, closes Fix, or closes help.
+      </p>
+    </section>
+
+    <section id="contrast">
+      <h2>Contrast tab</h2>
+      <p>
+        This is the pair checker. Enter a foreground and a background, set size/weight/style, and read WCAG ratio plus APCA Lc for that pair.
+      </p>
+
+      <h3>Enter colors</h3>
+      <p>Focus starts on <strong>FG</strong> in edit mode. Accepted formats:</p>
+      <ul>
+        <li>Hex: <code>#rgb</code> or <code>#rrggbb</code> (the <code>#</code> is optional)</li>
+        <li>RGB / RGBA: <code>rgb(r, g, b)</code>, <code>r, g, b</code>, or <code>rgba(r, g, b, a)</code> (alpha is validated, RGB is used)</li>
+        <li>HSL: <code>hsl(h, s, l)</code> (percent signs on s/l are allowed)</li>
+      </ul>
+      <p>
+        <kbd>Tab</kbd> applies the field and moves to the next control. <kbd>Shift</kbd>+<kbd>Tab</kbd> goes backward. Invalid color input blocks the move and raises a toast:
+      </p>
+      <figure class="wide">
+        <img src="images/toast.png" width="1600" height="1000" alt="Contrast tab with FG field showing #000000zz. A bottom-right error toast reads Error: Invalid HEX format: Invalid. Focus stays on the FG field.">
+        <figcaption>Invalid hex stays in the field, focus does not move, and a toast explains the format. Toasts close after five seconds or when you click them.</figcaption>
+      </figure>
+
+      <h3>Size, weight, and style</h3>
+      <ul>
+        <li><strong>Size</strong> is CSS pixels, clamped 6–120. Default 16.</li>
+        <li><strong>Wt</strong> is 100–900 in steps of 100. Default 400.</li>
+        <li>Style chips: Regular, Bold, Italic, Bold+Italic. Italic is visual only; it does not change the math.</li>
+      </ul>
+      <p>
+        Focus Size or Weight, then <kbd>↑</kbd> / <kbd>↓</kbd> or <kbd>Ctrl</kbd>+<kbd>↑</kbd> / <kbd>Ctrl</kbd>+<kbd>↓</kbd>.
+        <kbd>Shift</kbd>+<kbd>Ctrl</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd> takes a larger step (size ±4, weight ±200).
+        Click the <code>↓</code> / <code>↑</code> glyphs, or use the mouse wheel over those fields.
+        <kbd>Ctrl</kbd>+<kbd>B</kbd> toggles bold (400 ↔ 700). <kbd>Ctrl</kbd>+<kbd>S</kbd> on Contrast cycles the style chips.
+      </p>
+
+      <h3>A realistic pair</h3>
+      <p>
+        Replace the defaults with a light brand color on a dark surface, then <kbd>Tab</kbd> out of each field. The preview polarity caption switches to “light on dark”, and both score tables update.
+      </p>
+      <figure class="wide">
+        <img src="images/contrast-pair.png" width="1600" height="1000" alt="Contrast tab with FG #88D9F7 on BG #0F1114. Preview shows light cyan text on a near-black sample labeled light on dark. WCAG ratio 11.99 PASS. APCA Lc 77.85 PASS at 16px, with the 12px quick-reference row marked FAIL.">
+        <figcaption>
+          Brand pair <code>#88D9F7</code> on <code>#0F1114</code>. WCAG 11.99:1 passes AA at 16px. APCA Lc 77.85 passes the header bar (Lc75) at 16px, but the 12px lookup row still fails — size matters.
+        </figcaption>
+      </figure>
+
+      <h3>How to read the scores</h3>
+      <ul>
+        <li><strong>WCAG</strong> official pass/fail uses the header level (AA or AAA) plus large-text rules: 18px+, or 14px+ at weight ≥ 700. AA normal text needs 4.5:1; AA large text needs 3:1.</li>
+        <li><strong>APCA</strong> official pass/fail is <code>|Lc| ≥</code> the header bar. The lookup line is advisory: recommended Lc for the current size/weight, not a second fail.</li>
+        <li>Quick-reference tables show 12 / 14 / 16 / 18px (APCA also 24px) at the current weight so you can see how the same pair behaves at nearby sizes.</li>
+        <li>APCA is directional. “Text on Primary” is not the same pair as “Primary on Text”.</li>
+      </ul>
+      <p>
+        The TUI preview is labeled <code>approx</code>. Terminal widgets cannot honor a real CSS pixel size or font family. Use <kbd>Ctrl</kbd>+<kbd>O</kbd> for a true browser sample.
+      </p>
+      <p>
+        Other Contrast actions: <kbd>Space</kbd> swaps FG/BG (unless Style chips are focused), <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the focused color’s hex, Shift-click a swatch does the same.
+      </p>
+    </section>
+
+    <section id="fail-fix">
+      <h2>Fails and the Fix pane</h2>
+      <p>
+        Two light brand colors stacked together is a common miss. Coral on gold here is 1.58:1 — it fails WCAG and APCA at every listed size.
+      </p>
+      <figure class="wide">
+        <img src="images/contrast-fail.png" width="1600" height="1000" alt="Contrast tab with FG #F98971 on BG #FFCA76. Preview is coral text on a gold sample. WCAG ratio 1.58 FAIL, APCA Lc 18.28 FAIL, and every quick-reference row is FAIL.">
+        <figcaption>Failing pair <code>#F98971</code> on <code>#FFCA76</code>. Use this as a check that both engines agree the pair is unusable for body text.</figcaption>
+      </figure>
+      <p>
+        Press <kbd>Ctrl</kbd>+<kbd>F</kbd> or click <strong>Fix</strong>. A strip opens at the bottom (wide/medium terminals) or a centered overlay (narrow). It shows the current pair, a nearby candidate, OKLab lightness gauges, Apply / Next / Close, and chips to send the fixed color into a palette role.
+      </p>
+      <figure class="wide">
+        <img src="images/fix.png" width="1600" height="1000" alt="Contrast tab with the Fix strip along the bottom. NOW shows #88D9F7 on #0F1114, WCAG 11.99 PASS, APCA Lc +78 PASS. FIXED shows a slightly lighter candidate #8ddefc on the same background. FG and BG lightness gauges, Apply Next Close buttons, and FG→ / BG→ role chips for Pri Sec Ter Sup.">
+        <figcaption>
+          Fix on a passing pair still offers a nearby candidate. On a fail, <kbd>Ctrl</kbd>+<kbd>N</kbd> walks candidates, <kbd>[</kbd> / <kbd>]</kbd> nudge OKLab L (Shift for a larger step), and Enter on Apply commits the candidate into FG/BG.
+        </figcaption>
+      </figure>
+      <p>
+        From Fix you can push the focused axis into Primary / Secondary / Tertiary / Support with the <code>FG→</code> / <code>BG→</code> chips, or the keys <kbd>p</kbd> <kbd>s</kbd> <kbd>t</kbd> <kbd>u</kbd>. That is the handoff into the Palette tab — Contrast FG/BG are not overwritten by palette generation.
+      </p>
+    </section>
+
+    <section id="web">
+      <h2>Browser preview</h2>
+      <p>
+        <kbd>Ctrl</kbd>+<kbd>O</kbd> (or the <strong>Web</strong> action) writes <code>/tmp/dd_wcag_preview.html</code> and opens it. That file is the only path that renders a real CSS <code>font-size</code> and loads the preview font from Google Fonts when the family name is a normal Latin identifier.
+      </p>
+      <figure>
+        <img src="images/web-preview.png" width="980" height="560" alt="Browser preview page with a centered panel. Meta row reads Size 16px, Weight normal, Font Roboto, FG #88d9f7, BG #0f1114. Sample text The quick brown fox jumps over the lazy dog is light cyan on near-black at 16 CSS pixels.">
+        <figcaption>True CSS preview of the brand pair. TUI size/weight math still uses the numeric values you typed even when the terminal cannot display them.</figcaption>
+      </figure>
+      <div class="callout warn">
+        <h3>Weight in the web preview</h3>
+        <p style="margin:0">
+          The preview page currently labels weight and notes that it is not applied in the HTML sample. Contrast math in the TUI still uses the weight you set.
+        </p>
+      </div>
+    </section>
+
+    <section id="palette">
+      <h2>Palette builder</h2>
+      <p>
+        Press <kbd>2</kbd> or click <strong>Palette</strong>. Required bases are Primary, Secondary, and Tertiary. Support is optional (default <code>#46BE8C</code>). Text roles are fixed tokens and generation never edits them.
+      </p>
+      <figure class="wide">
+        <img src="images/palette.png" width="1600" height="1000" alt="Palette tab. Left: Palette Inputs with Primary #88D9F7 selected, Secondary #FFCA76, Tertiary #F98971, Support #46BE8C, and help text that Primary Secondary Tertiary are required. Right: Selected / Generated Detail for Primary showing hex, rgb, hsl, and Generated: none with a prompt to press Ctrl+G.">
+        <figcaption>Palette tab before generate. <kbd>Enter</kbd> begins/commits a role edit. <kbd>↑</kbd> / <kbd>↓</kbd> move between roles.</figcaption>
+      </figure>
+      <p>
+        <kbd>Ctrl</kbd>+<kbd>G</kbd> derives light and dark surfaces, action states, semantics, neutrals, and support tokens, then runs WCAG compliance checks. The detail list is scrollable (<kbd>↑</kbd> / <kbd>↓</kbd>, <kbd>PageUp</kbd> / <kbd>PageDown</kbd>, mouse wheel). A scrollbar appears when the list overflows.
+      </p>
+      <figure class="wide">
+        <img src="images/palette-generated.png" width="1600" height="1000" alt="Palette tab after generation. Detail header reads Generated Detail 1/203. Summary line: Generated 140 tokens, 0 blocking failures, 0 advisory warnings. A long list of $c_primary_* SCSS variables with hex values, a visible scrollbar, and a status toast Palette generated: 0 blocking.">
+        <figcaption>Successful generate: 140 tokens, no blocking failures. Scroll the detail list to inspect every variable and each compliance check.</figcaption>
+      </figure>
+
+      <h3>Export</h3>
+      <p>
+        <kbd>Ctrl</kbd>+<kbd>S</kbd> opens a file picker (default name <code>_palette.scss</code>).
+        <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the same SCSS when a clipboard command exists.
+        Both are gated:
+      </p>
+      <ul>
+        <li>You must generate first.</li>
+        <li>Required bases must parse.</li>
+        <li>Blocking WCAG failures (action text/surface, borders, focus) refuse export.</li>
+        <li>Disabled-state failures are advisory and do not block.</li>
+      </ul>
+      <p>
+        Generated variables are opaque <code>rgba(r, g, b, 1)</code>, grouped in a fixed order: Primary, Secondary, Tertiary, Primary Action, Secondary Action, Tertiary Action, Semantic, Text Roles, Neutrals, Support/Utility.
+      </p>
+    </section>
+
+    <section id="theme">
+      <h2>Theming</h2>
+      <p>Chrome colors load from YAML, first hit wins:</p>
+      <ol>
+        <li><code>./dd_wcag_theme.yml</code> (project-local)</li>
+        <li><code>~/.config/ldnddev/dd_wcag_theme.yml</code> (global)</li>
+        <li>Built-in defaults</li>
+      </ol>
+      <p>
+        Files must declare <code>version: 1</code>. Unsupported or missing versions fall back to defaults and toast a warning. Press <kbd>F2</kbd> to see the active source, version, and every token.
+      </p>
+      <figure class="wide">
+        <img src="images/theme.png" width="1600" height="1000" alt="Theme debug popup titled Theme. Source local, version 1, then a list of color tokens such as base_background #0F1114, text_labels #FFAF46, text_active_focus #64B4F5, success #82e0aa, each hex shown in its own color.">
+        <figcaption>F2 theme inspector. Token names match <code>THEME_STRUCTURE_STANDARD.md</code> — the shared ldnddev TUI schema.</figcaption>
+      </figure>
+    </section>
+
+    <section id="keys">
+      <h2>Keyboard and mouse</h2>
+      <p>
+        <kbd>F1</kbd> opens the in-app list. <kbd>Esc</kbd> or a click outside closes it.
+      </p>
+      <figure class="wide">
+        <img src="images/help.png" width="1600" height="1000" alt="Keys and Mouse popup covering the Contrast tab. Sections for Navigation, Contrast, Palette, and Mouse, listing Tab, Ctrl+Q, Ctrl+G, Ctrl+F, Ctrl+O, click-to-focus, wheel, and Shift-click swatch.">
+        <figcaption>F1 is the live key list. If a binding changes in code, recapture this image (see <a href="#images">Updating tutorial images</a>).</figcaption>
+      </figure>
+
+      <h3>Everyday keys</h3>
+      <table>
+        <thead>
+          <tr><th>Key</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><kbd>1</kbd> / <kbd>2</kbd></td><td>Contrast / Palette (when you are not typing in a field)</td></tr>
+          <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Next / previous control; invalid color blocks the move</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Commit field, activate button, edit a palette role, or newline in preview text</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd></td><td>Step focused Size, Weight, Style, or Fix gauge</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Toggle Fix</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>Generate palette (also switches to Palette)</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open browser preview</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Contrast: cycle style chips. Palette: save SCSS</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Contrast: copy focused hex. Palette: copy generated SCSS</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Q</kbd></td><td>Quit</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Blur / close Fix / close F1 or F2 — never quit</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Mouse</h3>
+      <ul>
+        <li>Click a field to focus it and place the caret. There is no selection range.</li>
+        <li>Click tabs, WCAG, or APCA to switch or cycle.</li>
+        <li>Click style chips, Swap, Copy, Fix, or Web to fire that action.</li>
+        <li>Wheel over Size/Weight steps the value; wheel over the left Contrast column or palette detail scrolls.</li>
+        <li>Shift-click a color swatch to copy that hex.</li>
+        <li>Click a toast to dismiss it.</li>
+      </ul>
+    </section>
+
+    <section id="uninstall">
+      <h2>Uninstall</h2>
+      <pre><code>./install.sh -uninstall</code></pre>
+      <p>
+        Removes <code>~/.local/bin/dd_wcag</code> and <code>~/.config/ldnddev/dd_wcag_theme.yml</code>, then removes <code>~/.config/ldnddev</code> only if the directory is empty. Pass <code>--prefix</code> / <code>--config-dir</code> if you installed somewhere else.
+      </p>
+    </section>
+
+    <section id="images">
+      <h2>Updating tutorial images</h2>
+      <p>
+        Screenshots live in <code>docs/images/</code> and are referenced relatively from this page. The repo-root <code>screenshot.png</code> is a copy of <code>contrast-pair.png</code> for the README hero.
+      </p>
+
+      <h3>Regenerate everything</h3>
+      <p>On a Wayland session with foot, tmux, grim, and hyprctl:</p>
+      <pre><code>./docs/capture-screenshots.sh</code></pre>
+      <p>
+        Optional: <code>SKIP_WEB=1</code> skips the Chromium web-preview shot. <code>KEEP_WINDOW=1</code> leaves the last capture window open. The script builds the release binary if needed, floats a 1600×1000 foot window, drives the TUI through tmux, and writes the PNGs listed below.
+      </p>
+      <div class="callout">
+        <h3>After a recapture</h3>
+        <p style="margin:0">
+          Open this HTML file in a browser and look at every figure. Confirm the UI still matches the caption (colors, pass/fail, toasts, Fix strip, generated token count). If a shot is stale or blank, rerun the script rather than editing the PNG by hand.
+        </p>
+      </div>
+
+      <h3>What each file shows</h3>
+      <table>
+        <thead>
+          <tr><th>File</th><th>How it is captured</th><th>Replace when…</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>contrast.png</code></td>
+            <td>Default Contrast tab after the 5s startup toast expires</td>
+            <td>Layout, default colors, or score panels change</td>
+          </tr>
+          <tr>
+            <td><code>help.png</code></td>
+            <td><kbd>F1</kbd></td>
+            <td>Keybindings copy in <code>render_keybindings_popup</code> changes</td>
+          </tr>
+          <tr>
+            <td><code>theme.png</code></td>
+            <td><kbd>F2</kbd></td>
+            <td>Theme tokens or F2 layout change</td>
+          </tr>
+          <tr>
+            <td><code>toast.png</code></td>
+            <td>Type <code>zz</code> into FG, then <kbd>Tab</kbd></td>
+            <td>Toast placement or parse-error wording changes</td>
+          </tr>
+          <tr>
+            <td><code>contrast-fail.png</code></td>
+            <td>FG <code>#F98971</code>, BG <code>#FFCA76</code></td>
+            <td>Fail styling or score tables change</td>
+          </tr>
+          <tr>
+            <td><code>contrast-pair.png</code></td>
+            <td>FG <code>#88D9F7</code>, BG <code>#0F1114</code></td>
+            <td>Preview, conversions, or default size/weight change</td>
+          </tr>
+          <tr>
+            <td><code>fix.png</code></td>
+            <td>Brand pair, then <kbd>Ctrl</kbd>+<kbd>F</kbd></td>
+            <td>Fix strip layout or gauges change</td>
+          </tr>
+          <tr>
+            <td><code>web-preview.png</code></td>
+            <td>Chromium headless shot of <code>/tmp/dd_wcag_preview.html</code> after the brand pair</td>
+            <td><code>web_preview.rs</code> markup or styles change</td>
+          </tr>
+          <tr>
+            <td><code>palette.png</code></td>
+            <td><kbd>2</kbd> on a fresh session</td>
+            <td>Palette input/detail chrome changes</td>
+          </tr>
+          <tr>
+            <td><code>palette-generated.png</code></td>
+            <td><kbd>Ctrl</kbd>+<kbd>G</kbd> on the default bases</td>
+            <td>Token naming, generate summary, or scrollbar chrome changes</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Add a new screenshot</h3>
+      <ol>
+        <li>Pick a kebab-case filename, for example <code>docs/images/matrix.png</code>.</li>
+        <li>Add a <code>shot name</code> step (and any <code>tmux send-keys</code> needed) to the matching phase in <code>docs/capture-screenshots.sh</code>.</li>
+        <li>Document the file in the script’s header catalog and in the table above.</li>
+        <li>Insert a <code>&lt;figure&gt;</code> in this page. Write <code>alt</code> that describes the UI state, not “screenshot of…”. Keep the visible caption for the teaching point.</li>
+        <li>Run the capture script, then hard-refresh this page (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) so the browser does not keep an old PNG.</li>
+      </ol>
+      <p>
+        Capture the full 1600×1000 window. Do not crop in an editor unless you also change the <code>width</code> / <code>height</code> attributes and the script. Prefer rerunning the script over photoshopping chrome, because key labels drift.
+      </p>
+      <p>
+        The capture window uses your current foot theme and font. If screenshots look “off-brand” after a desktop theme switch, rerun the script so the tutorial matches what users of this machine actually see.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>
+        Product behavior is specified in <a href="../SPEC.md">SPEC.md</a>.
+        Theme tokens are specified in <a href="../THEME_STRUCTURE_STANDARD.md">THEME_STRUCTURE_STANDARD.md</a>.
+        Source: <a href="https://github.com/ldnddev/dd_wcag">github.com/ldnddev/dd_wcag</a>.
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
