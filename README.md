@@ -9,26 +9,36 @@ Terminal WCAG 2.x + APCA contrast checker and SCSS palette builder.
 ## Quick start
 
 ```bash
-cargo run
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash
+dd_wcag
 ```
 
-Install the binary to `~/.local/bin` (and a default theme if missing):
+The installer detects OS and CPU, downloads the matching GitHub Release package when one exists (Linux glibc x86_64/arm64, macOS Intel/Apple Silicon), and puts the binary in `~/.local/bin`. Alpine/musl and unpublished targets fall back to a cargo build. A default theme is copied to `~/.config/ldnddev/` only if that file is missing. Pin a release with `--version`, or force a cargo build with `--from-source`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.5.0
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --from-source
+```
+
+From a local checkout (builds with cargo):
 
 ```bash
 ./install.sh
 dd_wcag
 ```
 
-From a remote repo:
-
-```bash
-./install.sh --repo https://github.com/ldnddev/dd_wcag.git --branch master
-```
-
 Uninstall:
 
 ```bash
 ./install.sh -uninstall
+# or, without a checkout:
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- -uninstall
+```
+
+Developers can still run the TUI without installing:
+
+```bash
+cargo run
 ```
 
 ## What it does

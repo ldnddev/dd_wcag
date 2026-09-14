@@ -337,7 +337,8 @@
       <h2>Requirements</h2>
       <ul>
         <li>A truecolor terminal (foot, kitty, Alacritty, Ghostty, WezTerm, and similar).</li>
-        <li><a href="https://rustup.rs">Rust / cargo</a> to build from source.</li>
+        <li><code>curl</code> (or <code>wget</code>) and <code>tar</code> for the one-line package installer.</li>
+        <li><a href="https://rustup.rs">Rust / cargo</a> only if you build from source.</li>
         <li>Optional: a clipboard helper (<code>wl-copy</code>, <code>xclip</code>, <code>xsel</code>, <code>pbcopy</code>, or <code>clip</code>) so <kbd>Ctrl</kbd>+<kbd>C</kbd> can copy hex or SCSS.</li>
         <li>Optional: a graphical session so <kbd>Ctrl</kbd>+<kbd>O</kbd> can open the CSS preview in a browser.</li>
       </ul>
@@ -349,14 +350,28 @@
     <section id="install">
       <h2>Install</h2>
 
+      <h3>One-line package install</h3>
+      <pre><code>curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash</code></pre>
+      <p>
+        Detects your OS and CPU, downloads the matching GitHub Release tarball
+        (<code>dd_wcag-&lt;rustc-target&gt;.tar.gz</code> for Linux glibc x86_64/arm64 and macOS Intel/Apple Silicon),
+        verifies the SHA-256 checksum when that file is published, and installs the binary to
+        <code>~/.local/bin/dd_wcag</code>. Alpine/musl and unpublished targets fall back to a cargo build.
+        The default theme is copied to
+        <code>~/.config/ldnddev/</code> only if that file is missing.
+      </p>
+      <p>Pin a release, or force a cargo build if no package exists for your machine:</p>
+      <pre><code>curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.5.0
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --from-source</code></pre>
+
       <h3>From this checkout</h3>
       <pre><code>./install.sh</code></pre>
-      <p>The installer:</p>
+      <p>From a git checkout the installer builds with cargo in release mode, then:</p>
       <ul>
-        <li>Builds <code>dd_wcag</code> in release mode.</li>
         <li>Installs the binary to <code>~/.local/bin/dd_wcag</code>.</li>
         <li>Copies <code>dd_wcag_theme.yml</code> to <code>~/.config/ldnddev/</code> only if that file is missing (it will not overwrite your theme).</li>
       </ul>
+      <p>Pass <code>--prebuilt</code> to download a Release package instead of compiling.</p>
 
       <h3>By cloning the repo</h3>
       <pre><code>./install.sh --repo https://github.com/ldnddev/dd_wcag.git --branch master</code></pre>
@@ -582,7 +597,9 @@ cargo build --release
 
     <section id="uninstall">
       <h2>Uninstall</h2>
-      <pre><code>./install.sh -uninstall</code></pre>
+      <pre><code>./install.sh -uninstall
+# or, without a checkout:
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- -uninstall</code></pre>
       <p>
         Removes <code>~/.local/bin/dd_wcag</code> and <code>~/.config/ldnddev/dd_wcag_theme.yml</code>, then removes <code>~/.config/ldnddev</code> only if the directory is empty. Pass <code>--prefix</code> / <code>--config-dir</code> if you installed somewhere else.
       </p>

@@ -15,8 +15,10 @@ cargo check --locked            # CI parity (matches .github/workflows/ci.yml)
 cargo test --locked             # full test suite (CI command)
 cargo test <name>               # run a single test by name substring
 cargo test --test <file>        # run a specific integration test file
-./install.sh                    # build + install binary to ~/.local/bin and theme to ~/.config/ldnddev
+./install.sh                    # local checkout: cargo build + install to ~/.local/bin
+./install.sh --prebuilt         # download the GitHub Release package for this machine
 ./install.sh -uninstall         # remove installed binary + theme (and config dir if empty)
+# curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash
 ```
 
 Tests live in `#[cfg(test)] mod tests` blocks alongside the code in `main.rs`, `app.rs`, and `color.rs`.
