@@ -363,7 +363,7 @@ For support: `support_border` and `support_focus` vs light/dark neutrals; `suppo
 
 ### 8.5 Export (`Ctrl+S` / `Ctrl+C`)
 
-Same payload. Default path `./_palette.scss`.
+Copy uses the SCSS payload. Save writes `_palette.scss` and a companion `_palette.tokens.json` (Tokens Studio / Penpot design-token JSON with `$value` / `$type` / `$themes` / `$metadata`) beside the chosen SCSS path. Default SCSS path `./_palette.scss`. The JSON splits paired colors into Light/Dark sets that share names (`$c_foo--dark` becomes `c_foo` in Dark); unpaired extras stay in Global.
 
 Block when:
 
@@ -628,7 +628,7 @@ Leaving a color field (click another control) runs the same apply/parse path as 
 | `[` `]` | OKLab L ±0.02 on the focused **color** (FG / BG / role), including when Fix is closed |
 | `{` `}` | hue ± on the focused color |
 | `Ctrl+Up` / `Ctrl+Down` | **shared stepper**, only for the focused control (see below). No global size/weight shortcut. |
-| `Ctrl+S` | Contrast: cycle style presets. Palette: save `_palette.scss` (gated) |
+| `Ctrl+S` | Contrast: cycle style presets. Palette: save `_palette.scss` + `_palette.tokens.json` (gated) |
 | `Ctrl+F` | toggle Fix |
 | `Ctrl+G` | generate + audit palette (switches to Palette if needed) |
 | `Ctrl+C` | Palette: copy `_palette.scss` (gated). Else: copy focused hex |

@@ -522,8 +522,10 @@ cargo build --release
 
       <h3>Export</h3>
       <p>
-        <kbd>Ctrl</kbd>+<kbd>S</kbd> opens a file picker (default name <code>_palette.scss</code>).
-        <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the same SCSS when a clipboard command exists.
+        <kbd>Ctrl</kbd>+<kbd>S</kbd> opens a file picker (default name <code>_palette.scss</code>)
+        and also writes <code>_palette.tokens.json</code> beside it for import into Penpot or Figma (Tokens Studio),
+        with Light and Dark themes that share token names.
+        <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the SCSS when a clipboard command exists.
         Both are gated:
       </p>
       <ul>
@@ -577,7 +579,7 @@ cargo build --release
           <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Toggle Fix</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>Generate palette (also switches to Palette)</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open browser preview</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Contrast: cycle style chips. Palette: save SCSS</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Contrast: cycle style chips. Palette: save SCSS + tokens JSON</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Contrast: copy focused hex. Palette: copy generated SCSS</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Q</kbd></td><td>Quit</td></tr>
           <tr><td><kbd>Esc</kbd></td><td>Blur / close Fix / close F1 or F2 — never quit</td></tr>

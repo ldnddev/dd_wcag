@@ -11,24 +11,8 @@ pub enum Breakpoint {
 }
 
 impl Breakpoint {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Wide => "Wide",
-            Self::Medium => "Medium",
-            Self::Narrow => "Narrow",
-        }
-    }
-
     pub fn contrast_side_by_side(self) -> bool {
         !matches!(self, Self::Narrow)
-    }
-
-    pub fn palette_roles_width(self) -> Option<u16> {
-        match self {
-            Self::Wide => Some(28),
-            Self::Medium => Some(24),
-            Self::Narrow => None,
-        }
     }
 
     pub fn fix_strip_height(self) -> Option<u16> {

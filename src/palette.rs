@@ -1,7 +1,22 @@
 use crate::color::Color;
 use palette::{FromColor, Hsl, IntoColor, Srgb};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 pub const PALETTE_EXPORT_PATH: &str = "_palette.scss";
+pub const PALETTE_TOKENS_EXPORT_PATH: &str = "_palette.tokens.json";
+
+/// Companion Tokens Studio / Penpot JSON path next to a saved SCSS file.
+pub fn tokens_json_path_for(scss_path: &Path) -> PathBuf {
+    let file_name = scss_path
+        .file_stem()
+        .map(|stem| format!("{}.tokens.json", stem.to_string_lossy()))
+        .unwrap_or_else(|| PALETTE_TOKENS_EXPORT_PATH.to_string());
+    match scss_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(file_name),
+        _ => PathBuf::from(file_name),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteInput {
@@ -55,21 +70,6 @@ impl PaletteInput {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaletteApplyTarget {
-    Foreground,
-    Background,
-}
-
-impl PaletteApplyTarget {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Foreground => "FG",
-            Self::Background => "BG",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct PaletteState {
     pub primary_input: String,
@@ -80,7 +80,6 @@ pub struct PaletteState {
     pub editing: bool,
     pub edit_input: String,
     pub edit_cursor_char_idx: usize,
-    pub pending_apply: Option<PaletteApplyTarget>,
     pub detail_scroll: usize,
     pub detail_max_scroll: usize,
     pub generated: Option<GeneratedPalette>,
@@ -97,7 +96,6 @@ impl Default for PaletteState {
             editing: false,
             edit_input: String::new(),
             edit_cursor_char_idx: 0,
-            pending_apply: None,
             detail_scroll: 0,
             detail_max_scroll: 0,
             generated: None,
@@ -133,7 +131,6 @@ impl PaletteState {
     }
 
     pub fn select_next(&mut self) {
-        self.pending_apply = None;
         self.detail_scroll = 0;
         if self.selected_idx + 1 < PaletteInput::ALL.len() {
             self.selected_idx += 1;
@@ -141,13 +138,11 @@ impl PaletteState {
     }
 
     pub fn select_previous(&mut self) {
-        self.pending_apply = None;
         self.detail_scroll = 0;
         self.selected_idx = self.selected_idx.saturating_sub(1);
     }
 
     pub fn begin_edit(&mut self) {
-        self.pending_apply = None;
         self.editing = true;
         self.edit_input = self.selected_input().to_string();
         self.edit_cursor_char_idx = self.edit_input.chars().count();
@@ -166,7 +161,6 @@ impl PaletteState {
         self.detail_scroll = 0;
         self.editing = false;
         self.edit_input.clear();
-        self.pending_apply = None;
     }
 
     pub fn commit_edit(&mut self) {
@@ -211,14 +205,6 @@ impl PaletteState {
         self.edit_cursor_char_idx.min(u16::MAX as usize) as u16
     }
 
-    pub fn scroll_detail_up(&mut self) {
-        self.scroll_detail_by(-1);
-    }
-
-    pub fn scroll_detail_down(&mut self) {
-        self.scroll_detail_by(1);
-    }
-
     pub fn scroll_detail_by(&mut self, delta: i32) {
         if delta < 0 {
             self.detail_scroll = self
@@ -245,6 +231,7 @@ pub struct GeneratedPalette {
     pub tokens: Vec<PaletteToken>,
     pub checks: Vec<ComplianceCheck>,
     pub scss: String,
+    pub tokens_json: String,
 }
 
 impl GeneratedPalette {
@@ -303,18 +290,20 @@ pub fn generate_palette(state: &PaletteState) -> Result<GeneratedPalette, String
 
     let checks = build_checks(&tokens);
     let scss = render_scss(&tokens);
+    let tokens_json = render_tokens_json(&tokens);
 
     Ok(GeneratedPalette {
         tokens,
         checks,
         scss,
+        tokens_json,
     })
 }
 
-pub fn validate_export(
-    generated: Option<&GeneratedPalette>,
+pub fn validate_export<'a>(
+    generated: Option<&'a GeneratedPalette>,
     action: &str,
-) -> Result<String, String> {
+) -> Result<&'a GeneratedPalette, String> {
     let Some(generated) = generated else {
         return Err(format!("Generate palette before {action}"));
     };
@@ -328,7 +317,7 @@ pub fn validate_export(
         ));
     }
 
-    Ok(generated.scss.clone())
+    Ok(generated)
 }
 
 pub fn parse_palette_color(input: &str) -> Result<Color, String> {
@@ -979,6 +968,148 @@ fn render_scss(tokens: &[PaletteToken]) -> String {
     out
 }
 
+const EXTRA_JSON_COLORS: &[(&str, &str)] = &[
+    ("c_black", "#000000"),
+    ("c_red", "#bb0000"),
+    ("c_blue", "#0074BD"),
+    ("c_green", "#4d8f46"),
+    ("c_yellow", "#e7ff6f"),
+    ("c_white", "#ffffff"),
+    ("c_facebook", "#3b5998"),
+    ("c_twitter", "#00aced"),
+    ("c_pinterest", "#bb0000"),
+    ("c_instagram", "#777777"),
+    ("c_youtube", "#777777"),
+    ("c_comments", "#222222"),
+];
+
+fn json_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn token_json_name(name: &str) -> &str {
+    name.strip_prefix('$').unwrap_or(name)
+}
+
+fn token_json_hex(token: &PaletteToken) -> String {
+    if token.name.contains("overlay") {
+        "#000000cc".to_string()
+    } else {
+        token.color.to_hex()
+    }
+}
+
+fn emit_json_color_token(out: &mut String, first: &mut bool, name: &str, hex: &str) {
+    if !*first {
+        out.push_str(",\n");
+    }
+    *first = false;
+    out.push_str("    \"");
+    out.push_str(&json_escape(name));
+    out.push_str("\": {\n      \"$value\": \"");
+    out.push_str(&json_escape(hex));
+    out.push_str("\",\n      \"$type\": \"color\",\n      \"$description\": \"\"\n    }");
+}
+
+fn emit_json_token_set(out: &mut String, set_name: &str, entries: &[(String, String)]) {
+    out.push_str("  \"");
+    out.push_str(&json_escape(set_name));
+    out.push_str("\": {");
+    if !entries.is_empty() {
+        out.push('\n');
+        let mut first = true;
+        for (name, hex) in entries {
+            emit_json_color_token(out, &mut first, name, hex);
+        }
+        out.push('\n');
+    }
+    out.push_str("  }");
+}
+
+/// Tokens Studio / Penpot JSON with Global + Light/Dark sets that share token names.
+fn render_tokens_json(tokens: &[PaletteToken]) -> String {
+    let dark_bases: HashSet<String> = tokens
+        .iter()
+        .filter_map(|token| {
+            token_json_name(&token.name)
+                .strip_suffix("--dark")
+                .map(str::to_string)
+        })
+        .collect();
+
+    let mut global = Vec::new();
+    let mut light = Vec::new();
+    let mut dark = Vec::new();
+
+    for token in tokens {
+        let name = token_json_name(&token.name);
+        let hex = token_json_hex(token);
+        if let Some(base) = name.strip_suffix("--dark") {
+            dark.push((base.to_string(), hex));
+        } else if dark_bases.contains(name) {
+            light.push((name.to_string(), hex));
+        } else {
+            global.push((name.to_string(), hex));
+        }
+    }
+    for (name, hex) in EXTRA_JSON_COLORS {
+        global.push(((*name).to_string(), (*hex).to_string()));
+    }
+
+    let mut out = String::from("{\n");
+    emit_json_token_set(&mut out, "Global", &global);
+    out.push_str(",\n");
+    emit_json_token_set(&mut out, "Light", &light);
+    out.push_str(",\n");
+    emit_json_token_set(&mut out, "Dark", &dark);
+    out.push_str(
+        r#",
+  "$themes": [
+    {
+      "id": "9d0fed70-1056-80e1-8008-a5463f4c14fb",
+      "name": "light",
+      "group": "",
+      "description": "",
+      "isSource": false,
+      "selectedTokenSets": {
+        "Global": "enabled",
+        "Light": "enabled",
+        "Dark": "disabled"
+      }
+    },
+    {
+      "id": "9d0fed70-1056-80e1-8008-a5463f4c14fc",
+      "name": "dark",
+      "group": "",
+      "description": "",
+      "isSource": false,
+      "selectedTokenSets": {
+        "Global": "enabled",
+        "Light": "disabled",
+        "Dark": "enabled"
+      }
+    }
+  ],
+  "$metadata": {
+    "tokenSetOrder": [
+      "Global",
+      "Light",
+      "Dark"
+    ],
+    "activeThemes": [
+      "/light"
+    ],
+    "activeSets": [
+      "Global",
+      "Light"
+    ]
+  }
+}
+"#,
+    );
+    out
+}
+
 fn find_token<'a>(tokens: &'a [PaletteToken], name: &str) -> Option<&'a PaletteToken> {
     tokens.iter().find(|token| token.name == name)
 }
@@ -1183,8 +1314,8 @@ mod tests {
     fn support_chrome_and_disabled_text_meet_ui_floors() {
         let generated = generate_palette(&PaletteState::default()).expect("palette generates");
         for check in &generated.checks {
-            let support_chrome = check.label.contains("support_border")
-                || check.label.contains("support_focus");
+            let support_chrome =
+                check.label.contains("support_border") || check.label.contains("support_focus");
             let disabled_text = check.label.contains("action_disabled_text");
             if support_chrome || disabled_text {
                 assert!(
@@ -1213,5 +1344,67 @@ mod tests {
         let err = validate_export(None, "saving").expect_err("missing palette fails");
 
         assert_eq!(err, "Generate palette before saving");
+    }
+
+    #[test]
+    fn generated_tokens_json_matches_penpot_figma_shape() {
+        let generated = generate_palette(&PaletteState::default()).expect("palette generates");
+        let json = &generated.tokens_json;
+
+        assert!(json.contains("\"Global\""));
+        assert!(json.contains("\"Light\""));
+        assert!(json.contains("\"Dark\""));
+        assert!(json.contains("\"$themes\""));
+        assert!(json.contains("\"$metadata\""));
+        assert!(json.contains("\"name\": \"light\""));
+        assert!(json.contains("\"name\": \"dark\""));
+        assert!(json.contains("\"c_primary_default\""));
+        assert!(json.contains("\"c_text_primary\""));
+        assert!(json.contains("\"c_support_overlay\""));
+        assert!(json.contains("\"#000000cc\""));
+        assert!(json.contains("\"c_black\""));
+        assert!(json.contains("\"$type\": \"color\""));
+        assert!(!json.contains("\"$c_"));
+        assert!(
+            !json.contains("--dark"),
+            "theme JSON should strip --dark suffixes so Light/Dark share names"
+        );
+        for token in &generated.tokens {
+            let name = token_json_name(&token.name);
+            let exported = name.strip_suffix("--dark").unwrap_or(name);
+            assert!(
+                json.contains(&format!("\"{exported}\"")),
+                "tokens JSON missing {exported} (from {})",
+                token.name
+            );
+        }
+
+        let light_hex = generated
+            .tokens
+            .iter()
+            .find(|token| token.name == "$c_primary_default")
+            .map(token_json_hex)
+            .expect("light primary");
+        let dark_hex = generated
+            .tokens
+            .iter()
+            .find(|token| token.name == "$c_primary_default--dark")
+            .map(token_json_hex)
+            .expect("dark primary");
+        assert_ne!(light_hex, dark_hex);
+        assert!(json.contains(&light_hex));
+        assert!(json.contains(&dark_hex));
+    }
+
+    #[test]
+    fn tokens_json_path_sits_beside_scss() {
+        assert_eq!(
+            tokens_json_path_for(Path::new("_palette.scss")),
+            PathBuf::from("_palette.tokens.json")
+        );
+        assert_eq!(
+            tokens_json_path_for(Path::new("/tmp/brand/_palette.scss")),
+            PathBuf::from("/tmp/brand/_palette.tokens.json")
+        );
     }
 }

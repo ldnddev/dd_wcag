@@ -84,17 +84,21 @@ impl Color {
         Ok(Color(hsl.into_color()))
     }
 
+    pub fn rgb_u8(&self) -> (u8, u8, u8) {
+        (
+            (self.0.red * 255.0) as u8,
+            (self.0.green * 255.0) as u8,
+            (self.0.blue * 255.0) as u8,
+        )
+    }
+
     pub fn to_hex(&self) -> String {
-        let r = (self.0.red * 255.0) as u8;
-        let g = (self.0.green * 255.0) as u8;
-        let b = (self.0.blue * 255.0) as u8;
+        let (r, g, b) = self.rgb_u8();
         format!("#{:02x}{:02x}{:02x}", r, g, b)
     }
 
     pub fn to_rgb_str(&self) -> String {
-        let r = (self.0.red * 255.0) as u8;
-        let g = (self.0.green * 255.0) as u8;
-        let b = (self.0.blue * 255.0) as u8;
+        let (r, g, b) = self.rgb_u8();
         format!("rgb({},{},{})", r, g, b)
     }
 
@@ -131,14 +135,6 @@ impl Color {
 
     pub fn nudge_oklab_l(self, delta: f32) -> Color {
         self.with_oklab_l(self.oklab_l() + delta)
-    }
-
-    pub fn rgb_u8(&self) -> (u8, u8, u8) {
-        (
-            (self.0.red * 255.0) as u8,
-            (self.0.green * 255.0) as u8,
-            (self.0.blue * 255.0) as u8,
-        )
     }
 
     pub fn contrast_ratio(&self, other: &Color) -> f64 {
@@ -210,57 +206,15 @@ impl Color {
         output * 100.0 // Scale to Lc 0-100+
     }
 
-    // New: Determine if APCA passes based on font size and weight (approximate thresholds)
-    pub fn apca_passes(&self, other: &Color, font_size_px: u32, is_bold: bool) -> bool {
-        let lc = self.apca_lc(other).abs();
-        let threshold = match font_size_px {
-            0..=12 => {
-                if is_bold {
-                    75.0
-                } else {
-                    90.0
-                }
-            }
-            13..=18 => {
-                if is_bold {
-                    60.0
-                } else {
-                    75.0
-                }
-            }
-            19..=24 => {
-                if is_bold {
-                    45.0
-                } else {
-                    60.0
-                }
-            }
-            _ => {
-                if is_bold {
-                    30.0
-                } else {
-                    45.0
-                }
-            } // For larger text
-        };
-        lc >= threshold
-    }
-
     pub fn to_style(&self) -> ratatui::style::Style {
         use ratatui::style::{Color as TuiColor, Style};
-        Style::new().fg(TuiColor::Rgb(
-            (self.0.red * 255.0) as u8,
-            (self.0.green * 255.0) as u8,
-            (self.0.blue * 255.0) as u8,
-        ))
+        let (r, g, b) = self.rgb_u8();
+        Style::new().fg(TuiColor::Rgb(r, g, b))
     }
 
     pub fn to_tui_color(&self) -> ratatui::style::Color {
-        ratatui::style::Color::Rgb(
-            (self.0.red * 255.0) as u8,
-            (self.0.green * 255.0) as u8,
-            (self.0.blue * 255.0) as u8,
-        )
+        let (r, g, b) = self.rgb_u8();
+        ratatui::style::Color::Rgb(r, g, b)
     }
 }
 
@@ -322,11 +276,11 @@ mod tests {
     }
 
     #[test]
-    fn test_apca_passes() {
+    fn test_apca_lookup_thresholds() {
         let fg = Color(Srgb::new(0.0, 0.0, 0.0));
         let bg = Color(Srgb::new(1.0, 1.0, 1.0));
-        assert!(fg.apca_passes(&bg, 16, false)); // Should pass for normal text
-        assert!(!fg.apca_passes(&Color(Srgb::new(0.8, 0.8, 0.8)), 10, false)); // Low contrast small text should fail
+        assert!(fg.apca_lc(&bg).abs() >= apca_lookup_lc(16, 400));
+        assert!(fg.apca_lc(&Color(Srgb::new(0.8, 0.8, 0.8))).abs() < apca_lookup_lc(10, 400));
     }
 
     #[test]

@@ -35,14 +35,6 @@ impl PairVerdict {
             apca: lc.abs() >= apca_bar,
         }
     }
-
-    pub fn label(self) -> &'static str {
-        match (self.wcag, self.apca) {
-            (true, true) => "PASS",
-            (false, false) => "FAIL",
-            _ => "~",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +102,7 @@ impl FixState {
         }
     }
 
+    #[cfg(test)]
     pub fn candidate_count(&self) -> usize {
         self.candidates.len()
     }

@@ -8,7 +8,8 @@ use crate::color::{Color, is_large_text};
 use crate::fix::{FixAxis, FixState};
 use crate::layout::{Hit, LayoutMap};
 use crate::palette::{
-    PaletteInput, PaletteState, generate_palette, parse_palette_color, validate_export,
+    GeneratedPalette, PaletteInput, PaletteState, generate_palette, parse_palette_color,
+    validate_export,
 };
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
@@ -124,7 +125,6 @@ pub enum FocusId {
     ApplyFix,
     NextFix,
     CloseFix,
-    Tabs,
     TargetWcag,
     TargetApca,
 }
@@ -734,35 +734,9 @@ impl App {
         self.cursor_char_idx -= 1;
     }
 
-    pub fn cursor_line_col(&self) -> (u16, u16) {
-        let mut row: u16 = 0;
-        let mut col: u16 = 0;
-        for (i, ch) in self.current_input.chars().enumerate() {
-            if i >= self.cursor_char_idx {
-                break;
-            }
-            if ch == '\n' {
-                row = row.saturating_add(1);
-                col = 0;
-            } else {
-                col = col.saturating_add(1);
-            }
-        }
-        (row, col)
-    }
-
     // Updates contrast ratio if both colors are parsed
     pub fn update_contrast(&mut self) {
         self.contrast_ratio = self.foreground.contrast_ratio(&self.background);
-    }
-
-    // Checks if ratio passes WCAG AA for given size/bold
-    pub fn passes_aa(&self, size: f32, bold: bool, ratio: f64) -> bool {
-        if (bold && size >= 14.0) || (!bold && size >= 18.0) {
-            ratio >= 3.0
-        } else {
-            ratio >= 4.5
-        }
     }
 
     pub fn submit_input(&mut self) -> bool {
@@ -883,7 +857,7 @@ impl App {
         }
     }
 
-    pub fn prepare_palette_export(&self, action: &str) -> Result<String, String> {
+    pub fn prepare_palette_export(&self, action: &str) -> Result<&GeneratedPalette, String> {
         validate_export(self.palette.generated.as_ref(), action)
     }
 
@@ -1050,11 +1024,13 @@ mod tests {
         let mut app = App::new();
 
         assert!(app.generate_palette());
-        let scss = app
+        let export = app
             .prepare_palette_export("saving")
             .expect("generated palette exports");
 
-        assert!(scss.contains("$c_primary_default"));
+        assert!(export.scss.contains("$c_primary_default"));
+        assert!(export.tokens_json.contains("\"c_primary_default\""));
+        assert!(export.tokens_json.contains("\"$type\": \"color\""));
         assert!(app.error.is_none());
     }
 

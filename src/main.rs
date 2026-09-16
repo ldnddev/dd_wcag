@@ -27,8 +27,8 @@ mod web_preview;
 use app::{App, FocusId, Mode, StylePreset};
 use fix::FixAxis;
 use layout::{Hit, char_index_at, char_index_at_xy, view_scroll, visual_cursor};
-use palette::PALETTE_EXPORT_PATH;
 use palette::PaletteInput;
+use palette::{PALETTE_EXPORT_PATH, tokens_json_path_for};
 use theme::Theme;
 
 fn main() -> Result<()> {
@@ -835,8 +835,8 @@ fn save_palette_with_dialog(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
 ) -> Result<()> {
-    let scss = match app.prepare_palette_export("saving") {
-        Ok(scss) => scss,
+    let (scss, tokens_json) = match app.prepare_palette_export("saving") {
+        Ok(generated) => (generated.scss.clone(), generated.tokens_json.clone()),
         Err(err) => {
             app.notify_error(err);
             return Ok(());
@@ -854,7 +854,21 @@ fn save_palette_with_dialog(
 
     match chosen {
         Some(path) => match std::fs::write(&path, scss) {
-            Ok(()) => app.notify_status(format!("Palette saved to {}.", path.display())),
+            Ok(()) => {
+                let json_path = tokens_json_path_for(&path);
+                match std::fs::write(&json_path, tokens_json) {
+                    Ok(()) => app.notify_status(format!(
+                        "Palette saved to {} and {}.",
+                        path.display(),
+                        json_path.display()
+                    )),
+                    Err(err) => app.notify_error(format!(
+                        "Saved {} but failed to save {}: {err}",
+                        path.display(),
+                        json_path.display()
+                    )),
+                }
+            }
             Err(err) => app.notify_error(format!("Failed to save {}: {err}", path.display())),
         },
         None => app.notify_status("Save cancelled."),
@@ -863,21 +877,23 @@ fn save_palette_with_dialog(
 }
 
 fn copy_palette(app: &mut App) {
-    match app.prepare_palette_export("copying") {
-        Ok(scss) => match copy_to_clipboard(&scss) {
-            Ok(()) => {
-                app.copied_palette = Some(scss);
-                app.notify_status("Palette copied to clipboard.");
-            }
-            Err(err) => {
-                app.copied_palette = Some(scss);
-                app.notify_error(format!(
-                    "Could not access a system clipboard command: {err}. Palette is available in the app copy buffer."
-                ));
-            }
-        },
+    let scss = match app.prepare_palette_export("copying") {
+        Ok(generated) => generated.scss.clone(),
         Err(err) => {
             app.notify_error(err);
+            return;
+        }
+    };
+    match copy_to_clipboard(&scss) {
+        Ok(()) => {
+            app.copied_palette = Some(scss);
+            app.notify_status("Palette copied to clipboard.");
+        }
+        Err(err) => {
+            app.copied_palette = Some(scss);
+            app.notify_error(format!(
+                "Could not access a system clipboard command: {err}. Palette is available in the app copy buffer."
+            ));
         }
     }
 }

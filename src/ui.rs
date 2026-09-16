@@ -588,7 +588,7 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] 
             Paragraph::new(vec![
                 Line::from("* required   Text roles are fixed"),
                 Line::from("Enter: edit   Ctrl+G: generate"),
-                Line::from("Ctrl+S: save (choose file)   Ctrl+C: copy"),
+                Line::from("Ctrl+S: save SCSS + tokens JSON   Ctrl+C: copy SCSS"),
             ])
             .style(
                 Style::default()
@@ -952,7 +952,7 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Ctrl+G: generate full _palette.scss (focuses the detail list to scroll)"),
         Line::from("Enter: begin/commit role edit   Up/Down: select role; Detail: scroll"),
         Line::from("PageUp / PageDown: scroll generated output (Contrast: left column)"),
-        Line::from("Ctrl+S: save via file picker   Ctrl+C: copy generated SCSS"),
+        Line::from("Ctrl+S: save SCSS + Penpot/Figma tokens JSON   Ctrl+C: copy SCSS"),
         Line::from(""),
         Line::from("F1: this help   F2: theme source and tokens"),
         Line::from(""),

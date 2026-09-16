@@ -44,7 +44,7 @@ Five tabs: `Input | Conversions | Contrast | Preview | Palette`. `Tab`/`Shift+Ta
 `SPEC.md` is the product spec (layout, mouse, keyboard, and palette export). When changing palette code:
 - Required base inputs: `Primary`, `Secondary`, `Tertiary`. Optional: `Support`. Fixed text tokens must never be modified by generation.
 - Generated SCSS must use `rgba(r, g, b, 1)` and preserve the variable group order documented in the spec (Primary, Secondary, Tertiary, Primary Action, Secondary Action, Tertiary Action, Semantic, Text Roles, Neutrals, Support/Utility).
-- Export (`Ctrl+S`) and clipboard (`Ctrl+C`) share the same SCSS payload via `App::prepare_palette_export` and are **gated on WCAG compliance** — see `validate_export` in `palette.rs`. Disabled-state failures are advisory; non-disabled action text/surface and border/focus failures block export.
+- Export (`Ctrl+S`) and clipboard (`Ctrl+C`) share the same generated palette via `App::prepare_palette_export` and are **gated on WCAG compliance** — see `validate_export` in `palette.rs`. Save writes `_palette.scss` plus a companion `_palette.tokens.json` (Penpot / Tokens Studio for Figma). Copy still puts SCSS on the clipboard. Disabled-state failures are advisory; non-disabled action text/surface and border/focus failures block export.
 - Keys: `Ctrl+G` generates; `Ctrl+F` toggles Fix. Bare letters type into focused fields. Palette does not push colors to Contrast FG/BG (those fields are not visible on the Palette tab).
 
 ### Theming (cross-app standard)

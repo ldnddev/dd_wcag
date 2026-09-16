@@ -47,7 +47,7 @@ cargo run
 - Size 6–120px, weight 100–900, style chips, live conversions (hex / rgb / hsl)
 - Fix pane nudges OKLab lightness toward a passing candidate
 - Browser preview (`Ctrl+O`) at `/tmp/dd_wcag_preview.html` for true CSS pixel size
-- Palette builder from Primary / Secondary / Tertiary (optional Support) → WCAG-gated `_palette.scss`
+- Palette builder from Primary / Secondary / Tertiary (optional Support) → WCAG-gated `_palette.scss` and Penpot/Figma `_palette.tokens.json`
 
 ## Everyday keys
 
@@ -58,7 +58,7 @@ cargo run
 | `Ctrl+G` | Generate palette |
 | `Ctrl+F` | Toggle Fix |
 | `Ctrl+O` | Open browser preview |
-| `Ctrl+S` | Contrast: cycle style · Palette: save SCSS |
+| `Ctrl+S` | Contrast: cycle style · Palette: save SCSS + Penpot/Figma tokens JSON |
 | `Ctrl+C` | Contrast: copy hex · Palette: copy SCSS |
 | `F1` / `F2` | Keys & mouse · Theme inspector |
 | `Esc` | Blur / close popups (does not quit) |
