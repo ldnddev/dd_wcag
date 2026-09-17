@@ -121,6 +121,11 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+    if app.theme_editor.is_some() && !ctrl && key.code != KeyCode::F(1) {
+        handle_theme_editor(app, key);
+        return effects;
+    }
+
     if ctrl {
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => effects.quit = true,
@@ -182,14 +187,22 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
             app.show_theme_debug = false;
         }
         KeyCode::F(2) => {
-            app.show_theme_debug = !app.show_theme_debug;
             app.show_keybindings = false;
+            if app.theme_editor.is_some() {
+                close_theme_editor(app, true);
+            } else {
+                app.show_theme_debug = true;
+                app.theme_editor = Some(ldnddev_theme::ThemeEditor::new(
+                    theme::palette_from_theme(&app.theme),
+                    &[],
+                ));
+            }
         }
         KeyCode::Esc => {
             if app.show_keybindings {
                 app.show_keybindings = false;
-            } else if app.show_theme_debug {
-                app.show_theme_debug = false;
+            } else if app.theme_editor.is_some() {
+                close_theme_editor(app, true);
             } else if app.fix_open {
                 app.close_fix();
             } else if app.mode == Mode::Palette && app.palette.editing {
@@ -955,6 +968,93 @@ fn write_to_command_stdin(program: &str, args: &[&str], content: &str) -> std::i
             "{program} exited with {status}"
         )))
     }
+}
+
+fn handle_theme_editor(app: &mut App, key: KeyEvent) {
+    if key.code == KeyCode::F(2) {
+        close_theme_editor(app, true);
+        return;
+    }
+    let Some(ek) = map_editor_key(key) else {
+        return;
+    };
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let outcome = {
+        let Some(editor) = app.theme_editor.as_mut() else {
+            return;
+        };
+        editor.handle(ek, shift)
+    };
+    match outcome {
+        ldnddev_theme::EditorOutcome::PaletteChanged => {
+            if let Some(editor) = &app.theme_editor {
+                theme::apply_palette(&mut app.theme, &editor.palette);
+            }
+        }
+        ldnddev_theme::EditorOutcome::RequestSave => {
+            if let Err(err) = save_theme_editor(app) {
+                app.notify_error(format!("Save failed: {err}"));
+            }
+        }
+        ldnddev_theme::EditorOutcome::Closed { .. } => close_theme_editor(app, false),
+        ldnddev_theme::EditorOutcome::HexError(err) => {
+            app.notify_error(format!("Invalid hex: {err}"));
+        }
+        ldnddev_theme::EditorOutcome::None => {}
+    }
+}
+
+fn close_theme_editor(app: &mut App, revert: bool) {
+    if let Some(mut editor) = app.theme_editor.take() {
+        if revert {
+            editor.revert();
+        }
+        theme::apply_palette(&mut app.theme, &editor.palette);
+    }
+    app.show_theme_debug = false;
+}
+
+fn save_theme_editor(app: &mut App) -> anyhow::Result<()> {
+    let Some(editor) = &app.theme_editor else {
+        return Ok(());
+    };
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let path = ldnddev_theme::save_theme(
+        &editor.palette,
+        &root,
+        theme::PROJECT_THEME_FILE,
+        editor.save_target,
+        ldnddev_theme::default_config_home().as_deref(),
+        &editor.fields,
+    )?;
+    theme::apply_palette(&mut app.theme, &editor.palette);
+    app.theme_source = match editor.save_target {
+        ldnddev_theme::ThemeSaveTarget::Local => theme::ThemeSource::Local,
+        ldnddev_theme::ThemeSaveTarget::Global => theme::ThemeSource::Global,
+    };
+    app.notify_status(format!(
+        "Saved {} theme to {}",
+        editor.save_target.label(),
+        path.display()
+    ));
+    app.theme_editor = None;
+    app.show_theme_debug = false;
+    Ok(())
+}
+
+fn map_editor_key(key: KeyEvent) -> Option<ldnddev_theme::EditorKey> {
+    Some(match key.code {
+        KeyCode::Up => ldnddev_theme::EditorKey::Up,
+        KeyCode::Down => ldnddev_theme::EditorKey::Down,
+        KeyCode::Left => ldnddev_theme::EditorKey::Left,
+        KeyCode::Right => ldnddev_theme::EditorKey::Right,
+        KeyCode::Tab => ldnddev_theme::EditorKey::Tab,
+        KeyCode::Enter => ldnddev_theme::EditorKey::Enter,
+        KeyCode::Esc => ldnddev_theme::EditorKey::Esc,
+        KeyCode::Backspace => ldnddev_theme::EditorKey::Backspace,
+        KeyCode::Char(c) => ldnddev_theme::EditorKey::Char(c),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

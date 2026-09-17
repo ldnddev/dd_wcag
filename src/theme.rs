@@ -284,7 +284,7 @@ impl Theme {
         Ok(theme)
     }
 
-    fn set_token(&mut self, key: &str, value: &str) {
+    pub fn set_token(&mut self, key: &str, value: &str) {
         let value = value.to_string();
         match key {
             "base_background" => self.base_background = value,
@@ -407,6 +407,25 @@ impl Theme {
 
     pub fn info_color(&self) -> Color {
         color_or_reset(&self.info)
+    }
+}
+
+pub fn palette_from_theme(theme: &Theme) -> ldnddev_theme::Palette {
+    let mut palette = ldnddev_theme::Palette::builtin();
+    palette.version = u64::from(theme.version);
+    for (key, value) in theme.tokens() {
+        if let Ok(rgb) = ldnddev_theme::parse_hex_input(value) {
+            palette.set(key, rgb);
+        }
+    }
+    palette
+}
+
+pub fn apply_palette(theme: &mut Theme, palette: &ldnddev_theme::Palette) {
+    for field in ldnddev_theme::COLOR_FIELDS {
+        if let Some(rgb) = palette.get(field.key) {
+            theme.set_token(field.key, &rgb.to_hex());
+        }
     }
 }
 

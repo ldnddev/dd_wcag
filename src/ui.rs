@@ -987,6 +987,10 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
 
 fn render_theme_debug_popup(frame: &mut Frame, app: &App, popup: Rect) {
     frame.render_widget(Clear, popup);
+    if let Some(editor) = &app.theme_editor {
+        render_theme_editor(frame, app, popup, editor);
+        return;
+    }
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -1037,6 +1041,72 @@ fn render_theme_debug_popup(frame: &mut Frame, app: &App, popup: Rect) {
                     .style(Style::default().bg(app.theme.modal_background_color())),
             )
             .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn render_theme_editor(
+    frame: &mut Frame,
+    app: &App,
+    popup: Rect,
+    editor: &ldnddev_theme::ThemeEditor,
+) {
+    use ldnddev_theme::{ThemeEditorRow, theme_editor_rows};
+    let rows = theme_editor_rows(&editor.fields);
+    let channel = ["R", "G", "B"][editor.channel.min(2)];
+    let target = editor.save_target.label().to_uppercase();
+    let mut lines = vec![
+        Line::from(format!(
+            "Save: {target} (Tab)   Channel: {channel} ([/])   Y save   R reset   Esc revert"
+        )),
+        Line::from(if editor.editing_hex {
+            format!("Hex: {}█   Enter apply", editor.hex_draft)
+        } else {
+            format!("Hex: {}   Enter to type   +/- nudge", editor.hex_draft)
+        }),
+        Line::from(""),
+    ];
+    let view_h = popup.height.saturating_sub(6) as usize;
+    let start = rows
+        .iter()
+        .position(|row| match row {
+            ThemeEditorRow::Color(idx) => *idx >= editor.scroll,
+            ThemeEditorRow::Header(_) => false,
+        })
+        .unwrap_or(0);
+    let start = if start > 0 && matches!(rows[start - 1], ThemeEditorRow::Header(_)) {
+        start - 1
+    } else {
+        start
+    };
+    for row in rows.iter().skip(start).take(view_h.max(1)) {
+        match row {
+            ThemeEditorRow::Header(name) => lines.push(Line::from(*name)),
+            ThemeEditorRow::Color(idx) => {
+                let field = editor.fields[*idx];
+                let hex = editor
+                    .palette
+                    .get(field.key)
+                    .map(|c| c.to_hex())
+                    .unwrap_or_else(|| "#000000".into());
+                let cursor = if *idx == editor.selected { ">" } else { " " };
+                lines.push(Line::from(format!("{cursor} {:<22} {hex}", field.key)));
+            }
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.modal_text_color())
+                    .bg(app.theme.modal_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title("F2 Theme editor")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_active_color())),
+            ),
         popup,
     );
 }
