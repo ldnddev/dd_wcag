@@ -56,7 +56,7 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.5.0
+  curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.7.0
   ./install.sh
   ./install.sh --from-source
   ./install.sh -uninstall
