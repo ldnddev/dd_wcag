@@ -9,4 +9,4 @@ crossterm = "0.29.0"
 palette = "0.7.6"
 ratatui = "0.30.0"
 rfd = "0.15"
-ldnddev_theme = { path = "../ldnddev_theme" }
+ldnddev_theme = { git = "https://github.com/ldnddev/ldnddev_theme.git", tag = "v0.1.0" }
