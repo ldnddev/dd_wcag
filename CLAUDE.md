@@ -25,7 +25,8 @@ Tests live in `#[cfg(test)] mod tests` blocks alongside the code in `main.rs`, `
 
 ## Architecture
 
-### Module layout (all under `src/`)
+### Module layout
+Workspace crate: `crates/ldnddev_theme` (vendored; F2 theme editor). App modules under `src/`:
 - `main.rs` — terminal lifecycle, event loop, **pure** `handle_key_event` and the side-effect dispatcher. Also: clipboard integration (`pbcopy` / `clip` / `wl-copy` / `xclip` / `xsel`) and palette save.
 - `app.rs` — central `App` state, input-target switching, draft syncing, cursor-aware text editing, font-size clamping (`6..=120`), toast notification TTL.
 - `color.rs` — color parsing (`hex`, `rgb`, `rgba`, `hsl`), formatting, WCAG luminance/contrast math.

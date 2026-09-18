@@ -3,10 +3,13 @@ name = "dd_wcag"
 version = "0.7.0"
 edition = "2024"
 
+[workspace]
+members = ["crates/ldnddev_theme"]
+
 [dependencies]
 anyhow = "1.0.101"
 crossterm = "0.29.0"
 palette = "0.7.6"
 ratatui = "0.30.0"
 rfd = "0.15"
-ldnddev_theme = { git = "https://github.com/ldnddev/ldnddev_theme.git", tag = "v0.1.0" }
+ldnddev_theme = { path = "crates/ldnddev_theme" }
