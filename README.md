@@ -2,7 +2,7 @@
 
 Terminal WCAG 2.x + APCA contrast checker and SCSS palette builder.
 
-**[Illustrated tutorial](docs/tutorial.html)** — setup, install, Contrast, Fix, Palette, theming, and how to refresh the screenshots.
+**[Illustrated tutorial](https://ldnddev.github.io/dd_wcag/)** — setup, install, Contrast, Fix, Palette, theming, and how to refresh the screenshots.
 
 ![Contrast tab with a light brand color on a dark background](screenshot.png)
 
@@ -68,6 +68,6 @@ Theme lookup: `./dd_wcag_theme.yml`, then `~/.config/ldnddev/dd_wcag_theme.yml`,
 
 ## Docs
 
-- [Tutorial](docs/tutorial.html) — user guide with screenshots
+- [Tutorial](https://ldnddev.github.io/dd_wcag/) — user guide with screenshots (GitHub Pages)
 - [SPEC.md](SPEC.md) — product spec
 - [THEME_STRUCTURE_STANDARD.md](THEME_STRUCTURE_STANDARD.md) — shared ldnddev theme schema
