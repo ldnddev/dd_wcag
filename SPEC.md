@@ -825,5 +825,4 @@ Done when:
 | `SPEC.md` | This file. App product + layout + mouse + keyboard + palette export. |
 | `THEME_STRUCTURE_STANDARD.md` | Shared ldnddev YAML chrome tokens. |
 | `README.md` | User-facing install, keys, manual tests. Update when `layout-mouse` ships. |
-| `CLAUDE.md` | Agent working notes; points here for product rules. |
 | `dd_wcag_theme.yml` | Default/local theme instance. |
