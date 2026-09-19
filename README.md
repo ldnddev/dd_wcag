@@ -4,7 +4,7 @@ Terminal WCAG 2.x + APCA contrast checker and SCSS palette builder.
 
 **[Illustrated tutorial](https://ldnddev.github.io/dd_wcag/)** — setup, install, Contrast, Fix, Palette, theming, and how to refresh the screenshots.
 
-![Contrast tab with a light brand color on a dark background](screenshot.png)
+![Contrast tab with a light brand color on a dark background](docs/images/contrast-pair.png)
 
 ## Quick start
 

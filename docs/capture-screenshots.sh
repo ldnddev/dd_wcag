@@ -20,7 +20,7 @@
 #   theme.png                F2 theme source + tokens
 #   toast.png                Invalid HEX toast after typing junk
 #   contrast-fail.png        Coral on gold, WCAG + APCA FAIL
-#   contrast-pair.png        Brand pair #88D9F7 on #0F1114 (also copied to ./screenshot.png)
+#   contrast-pair.png        Brand pair #88D9F7 on #0F1114 (README hero)
 #   fix.png                  Fix pane on the brand pair
 #   web-preview.png          Chromium shot of /tmp/dd_wcag_preview.html
 #   palette.png              Palette tab before generate
@@ -242,9 +242,6 @@ echo "Capturing generated palette..."
 keys C-g
 sleep 0.4
 shot palette-generated
-
-cp -f "${IMG}/contrast-pair.png" "${ROOT}/screenshot.png"
-echo "  updated screenshot.png"
 
 echo "Done. Screenshots are in docs/images/"
 echo "Open docs/tutorial.html and confirm every figure still matches the UI."

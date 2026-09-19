@@ -6,10 +6,18 @@ edition = "2024"
 [workspace]
 members = ["crates/ldnddev_theme"]
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+
 [dependencies]
 anyhow = "1.0.101"
-crossterm = "0.29.0"
-palette = "0.7.6"
-ratatui = "0.30.0"
-rfd = "0.15"
+crossterm = "0.29"
+palette = { version = "0.7.6", default-features = false, features = ["std"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 ldnddev_theme = { path = "crates/ldnddev_theme" }
