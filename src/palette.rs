@@ -70,6 +70,106 @@ impl PaletteInput {
     }
 }
 
+/// Five conceptual matrix axes: rows are text, columns are surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixAxis {
+    Primary,
+    Secondary,
+    Tertiary,
+    Text,
+    Support,
+}
+
+impl MatrixAxis {
+    pub const ALL: [Self; 5] = [
+        Self::Primary,
+        Self::Secondary,
+        Self::Tertiary,
+        Self::Text,
+        Self::Support,
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Primary => 0,
+            Self::Secondary => 1,
+            Self::Tertiary => 2,
+            Self::Text => 3,
+            Self::Support => 4,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        Self::ALL[i.min(Self::ALL.len() - 1)]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Primary => "Primary",
+            Self::Secondary => "Secondary",
+            Self::Tertiary => "Tertiary",
+            Self::Text => "Text",
+            Self::Support => "Support",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Primary => "Pri",
+            Self::Secondary => "Sec",
+            Self::Tertiary => "Ter",
+            Self::Text => "Text",
+            Self::Support => "Sup",
+        }
+    }
+
+    pub fn as_palette_input(self) -> Option<PaletteInput> {
+        match self {
+            Self::Primary => Some(PaletteInput::Primary),
+            Self::Secondary => Some(PaletteInput::Secondary),
+            Self::Tertiary => Some(PaletteInput::Tertiary),
+            Self::Support => Some(PaletteInput::Support),
+            Self::Text => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MatrixCell {
+    pub text: MatrixAxis,
+    pub surface: MatrixAxis,
+    pub fg: Color,
+    pub bg: Color,
+    pub ratio: f64,
+    pub lc: f64,
+    pub wcag: bool,
+    pub apca: bool,
+}
+
+impl MatrixCell {
+    pub fn glyph(self) -> char {
+        match (self.wcag, self.apca) {
+            (true, true) => '✓',
+            (false, false) => '✗',
+            _ => '~',
+        }
+    }
+
+    pub fn shortfall(self, wcag_th: f64, apca_bar: f64) -> f64 {
+        let wcag = if self.wcag {
+            0.0
+        } else {
+            (wcag_th - self.ratio).max(0.0)
+        };
+        let apca = if self.apca {
+            0.0
+        } else {
+            (apca_bar - self.lc.abs()).max(0.0)
+        };
+        wcag + apca
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PaletteState {
     pub primary_input: String,
@@ -82,6 +182,10 @@ pub struct PaletteState {
     pub edit_cursor_char_idx: usize,
     pub detail_scroll: usize,
     pub detail_max_scroll: usize,
+    pub matrix_row: usize,
+    pub matrix_col: usize,
+    pub pair_scroll: usize,
+    pub pair_max_scroll: usize,
     pub generated: Option<GeneratedPalette>,
 }
 
@@ -98,6 +202,10 @@ impl Default for PaletteState {
             edit_cursor_char_idx: 0,
             detail_scroll: 0,
             detail_max_scroll: 0,
+            matrix_row: MatrixAxis::Text.index(),
+            matrix_col: MatrixAxis::Primary.index(),
+            pair_scroll: 0,
+            pair_max_scroll: 0,
             generated: None,
         }
     }
@@ -179,6 +287,15 @@ impl PaletteState {
         self.edit_cursor_char_idx += 1;
     }
 
+    pub fn insert_str_at_cursor(&mut self, s: &str) {
+        for c in s.chars() {
+            if c == '\r' {
+                continue;
+            }
+            self.insert_char_at_cursor(c);
+        }
+    }
+
     pub fn backspace_at_cursor(&mut self) {
         self.clamp_cursor();
         if self.edit_cursor_char_idx == 0 {
@@ -188,6 +305,17 @@ impl PaletteState {
         let start = byte_index_at_char(&self.edit_input, self.edit_cursor_char_idx - 1);
         self.edit_input.replace_range(start..end, "");
         self.edit_cursor_char_idx -= 1;
+    }
+
+    pub fn delete_at_cursor(&mut self) {
+        self.clamp_cursor();
+        let len = self.edit_input.chars().count();
+        if self.edit_cursor_char_idx >= len {
+            return;
+        }
+        let start = byte_index_at_char(&self.edit_input, self.edit_cursor_char_idx);
+        let end = byte_index_at_char(&self.edit_input, self.edit_cursor_char_idx + 1);
+        self.edit_input.replace_range(start..end, "");
     }
 
     pub fn move_cursor_left(&mut self) {
@@ -201,8 +329,89 @@ impl PaletteState {
         }
     }
 
+    pub fn move_cursor_home(&mut self) {
+        self.edit_cursor_char_idx = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        self.edit_cursor_char_idx = self.edit_input.chars().count();
+    }
+
     pub fn cursor_col(&self) -> u16 {
         self.edit_cursor_char_idx.min(u16::MAX as usize) as u16
+    }
+
+    pub fn matrix_text(&self) -> MatrixAxis {
+        MatrixAxis::from_index(self.matrix_row)
+    }
+
+    pub fn matrix_surface(&self) -> MatrixAxis {
+        MatrixAxis::from_index(self.matrix_col)
+    }
+
+    pub fn set_matrix(&mut self, row: usize, col: usize) {
+        if row == col {
+            return;
+        }
+        self.matrix_row = row.min(4);
+        self.matrix_col = col.min(4);
+    }
+
+    pub fn select_text_axis(&mut self) {
+        let col = if self.matrix_col == MatrixAxis::Text.index() {
+            MatrixAxis::Primary.index()
+        } else {
+            self.matrix_col
+        };
+        self.set_matrix(MatrixAxis::Text.index(), col);
+    }
+
+    pub fn move_matrix(&mut self, d_row: i32, d_col: i32) {
+        let mut r = self.matrix_row as i32;
+        let mut c = self.matrix_col as i32;
+        for _ in 0..5 {
+            r = (r + d_row).rem_euclid(5);
+            c = (c + d_col).rem_euclid(5);
+            if r != c {
+                self.matrix_row = r as usize;
+                self.matrix_col = c as usize;
+                return;
+            }
+        }
+    }
+
+    pub fn swap_matrix_axes(&mut self) {
+        if self.matrix_row != self.matrix_col {
+            std::mem::swap(&mut self.matrix_row, &mut self.matrix_col);
+        }
+    }
+
+    pub fn select_worst_failing_pair(&mut self, wcag_th: f64, apca_bar: f64) {
+        if let Some((row, col)) = worst_failing_pair(self, wcag_th, apca_bar) {
+            self.set_matrix(row, col);
+        } else {
+            self.set_matrix(MatrixAxis::Text.index(), MatrixAxis::Primary.index());
+        }
+    }
+
+    pub fn selected_family(&self) -> PaletteInput {
+        self.matrix_surface()
+            .as_palette_input()
+            .or_else(|| self.matrix_text().as_palette_input())
+            .unwrap_or_else(|| self.selected())
+    }
+
+    pub fn scroll_pair_by(&mut self, delta: i32) {
+        if delta < 0 {
+            self.pair_scroll = self
+                .pair_scroll
+                .saturating_sub(delta.unsigned_abs() as usize);
+        } else {
+            self.pair_scroll = self
+                .pair_scroll
+                .saturating_add(delta as usize)
+                .min(self.pair_max_scroll);
+        }
     }
 
     pub fn scroll_detail_by(&mut self, delta: i32) {
@@ -318,6 +527,113 @@ pub fn validate_export<'a>(
     }
 
     Ok(generated)
+}
+
+pub fn off_diagonal_pairs() -> Vec<(usize, usize)> {
+    let mut pairs = Vec::with_capacity(20);
+    for row in 0..5 {
+        for col in 0..5 {
+            if row != col {
+                pairs.push((row, col));
+            }
+        }
+    }
+    pairs
+}
+
+pub fn pair_list_index(row: usize, col: usize) -> Option<usize> {
+    off_diagonal_pairs()
+        .iter()
+        .position(|&pair| pair == (row, col))
+}
+
+pub fn pair_at_list_index(index: usize) -> Option<(usize, usize)> {
+    off_diagonal_pairs().into_iter().nth(index)
+}
+
+pub fn matrix_text_swatch() -> Color {
+    fixed_text_primary()
+}
+
+pub fn matrix_text_on_surface(surface: Color) -> Color {
+    if surface.luminance() > 0.5 {
+        fixed_text_primary()
+    } else {
+        fixed_text_primary_dark()
+    }
+}
+
+pub fn axis_surface_color(state: &PaletteState, axis: MatrixAxis) -> Option<Color> {
+    match axis {
+        MatrixAxis::Text => Some(fixed_text_primary()),
+        other => axis_base_color(state, other),
+    }
+}
+
+fn axis_base_color(state: &PaletteState, axis: MatrixAxis) -> Option<Color> {
+    match axis {
+        MatrixAxis::Primary => parse_palette_color(&state.primary_input).ok(),
+        MatrixAxis::Secondary => parse_palette_color(&state.secondary_input).ok(),
+        MatrixAxis::Tertiary => parse_palette_color(&state.tertiary_input).ok(),
+        MatrixAxis::Support => {
+            if state.support_input.trim().is_empty() {
+                Color::parse_hex("#46BE8C").ok()
+            } else {
+                parse_palette_color(&state.support_input).ok()
+            }
+        }
+        MatrixAxis::Text => Some(fixed_text_primary()),
+    }
+}
+
+pub fn matrix_cell(
+    state: &PaletteState,
+    row: usize,
+    col: usize,
+    wcag_th: f64,
+    apca_bar: f64,
+) -> Option<MatrixCell> {
+    let text = MatrixAxis::from_index(row);
+    let surface = MatrixAxis::from_index(col);
+    let bg = axis_surface_color(state, surface)?;
+    let fg = if text == MatrixAxis::Text {
+        matrix_text_on_surface(bg)
+    } else {
+        axis_base_color(state, text)?
+    };
+    let ratio = fg.contrast_ratio(&bg);
+    let lc = fg.apca_lc(&bg);
+    Some(MatrixCell {
+        text,
+        surface,
+        fg,
+        bg,
+        ratio,
+        lc,
+        wcag: ratio >= wcag_th,
+        apca: lc.abs() >= apca_bar,
+    })
+}
+
+pub fn worst_failing_pair(
+    state: &PaletteState,
+    wcag_th: f64,
+    apca_bar: f64,
+) -> Option<(usize, usize)> {
+    let mut best: Option<(f64, usize, usize)> = None;
+    for (row, col) in off_diagonal_pairs() {
+        let Some(cell) = matrix_cell(state, row, col, wcag_th, apca_bar) else {
+            continue;
+        };
+        if cell.wcag && cell.apca {
+            continue;
+        }
+        let score = cell.shortfall(wcag_th, apca_bar);
+        if best.is_none_or(|(best_score, _, _)| score > best_score) {
+            best = Some((score, row, col));
+        }
+    }
+    best.map(|(_, row, col)| (row, col))
 }
 
 pub fn parse_palette_color(input: &str) -> Result<Color, String> {
@@ -1406,5 +1722,85 @@ mod tests {
             tokens_json_path_for(Path::new("/tmp/brand/_palette.scss")),
             PathBuf::from("/tmp/brand/_palette.tokens.json")
         );
+    }
+
+    #[test]
+    fn matrix_skips_the_diagonal_and_defaults_to_text_on_primary() {
+        let state = PaletteState::default();
+        assert_eq!(state.matrix_text(), MatrixAxis::Text);
+        assert_eq!(state.matrix_surface(), MatrixAxis::Primary);
+        assert_eq!(off_diagonal_pairs().len(), 20);
+        assert!(matrix_cell(&state, 3, 3, 4.5, 75.0).is_some());
+        assert!(pair_list_index(3, 3).is_none());
+        assert_eq!(pair_list_index(3, 0), Some(12));
+    }
+
+    #[test]
+    fn matrix_arrows_skip_the_diagonal() {
+        let mut state = PaletteState::default();
+        state.set_matrix(0, 1);
+        state.move_matrix(0, -1);
+        assert_ne!(state.matrix_row, state.matrix_col);
+        assert_eq!(state.matrix_row, 0);
+        assert_eq!(state.matrix_col, 4);
+    }
+
+    #[test]
+    fn matrix_swap_exchanges_text_and_surface() {
+        let mut state = PaletteState::default();
+        state.set_matrix(1, 0);
+        state.swap_matrix_axes();
+        assert_eq!(state.matrix_row, 0);
+        assert_eq!(state.matrix_col, 1);
+    }
+
+    #[test]
+    fn text_on_light_surface_uses_dark_fixed_token() {
+        let white = Color::parse_hex("#ffffff").unwrap();
+        let black = Color::parse_hex("#000000").unwrap();
+        assert_eq!(matrix_text_on_surface(white).to_hex(), "#1c1e21");
+        assert_eq!(matrix_text_on_surface(black).to_hex(), "#f5f6f7");
+    }
+
+    #[test]
+    fn worst_failing_pair_picks_a_failing_off_diagonal_cell() {
+        let mut state = PaletteState::default();
+        state.primary_input = "#808080".into();
+        state.secondary_input = "#818181".into();
+        state.tertiary_input = "#00ff00".into();
+        let (row, col) = worst_failing_pair(&state, 4.5, 75.0).expect("a failing pair");
+        assert_ne!(row, col);
+        let cell = matrix_cell(&state, row, col, 4.5, 75.0).unwrap();
+        assert!(!(cell.wcag && cell.apca));
+    }
+
+    #[test]
+    fn matrix_glyph_is_pass_mixed_or_fail() {
+        let state = PaletteState::default();
+        let pass = MatrixCell {
+            text: MatrixAxis::Text,
+            surface: MatrixAxis::Primary,
+            fg: Color::parse_hex("#000000").unwrap(),
+            bg: Color::parse_hex("#ffffff").unwrap(),
+            ratio: 21.0,
+            lc: 100.0,
+            wcag: true,
+            apca: true,
+        };
+        assert_eq!(pass.glyph(), '✓');
+        let mixed = MatrixCell {
+            wcag: true,
+            apca: false,
+            ..pass
+        };
+        assert_eq!(mixed.glyph(), '~');
+        let fail = matrix_cell(&state, 0, 1, 7.0, 90.0).unwrap();
+        if !(fail.wcag && fail.apca) && (fail.wcag || fail.apca) {
+            assert_eq!(fail.glyph(), '~');
+        } else if fail.wcag && fail.apca {
+            assert_eq!(fail.glyph(), '✓');
+        } else {
+            assert_eq!(fail.glyph(), '✗');
+        }
     }
 }

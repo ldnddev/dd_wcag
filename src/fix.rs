@@ -39,6 +39,8 @@ impl PairVerdict {
 
 #[derive(Debug, Clone)]
 pub struct FixState {
+    pub original_fg: Color,
+    pub original_bg: Color,
     pub candidate_fg: Color,
     pub candidate_bg: Color,
     pub axis: FixAxis,
@@ -53,6 +55,8 @@ impl Default for FixState {
         let black = Color(palette::Srgb::new(0.0, 0.0, 0.0));
         let white = Color(palette::Srgb::new(1.0, 1.0, 1.0));
         Self {
+            original_fg: black,
+            original_bg: white,
             candidate_fg: black,
             candidate_bg: white,
             axis: FixAxis::Fg,
@@ -65,6 +69,8 @@ impl Default for FixState {
 
 impl FixState {
     pub fn search(&mut self, now_fg: Color, now_bg: Color, wcag_threshold: f64, apca_bar: f64) {
+        self.original_fg = now_fg;
+        self.original_bg = now_bg;
         self.candidates = collect_candidates(now_fg, now_bg, self.axis, wcag_threshold, apca_bar);
         self.index = 0;
         if let Some(&(fg, bg)) = self.candidates.first() {
@@ -99,6 +105,14 @@ impl FixState {
         match axis {
             FixAxis::Fg => self.candidate_fg = self.candidate_fg.nudge_oklab_l(delta),
             FixAxis::Bg => self.candidate_bg = self.candidate_bg.nudge_oklab_l(delta),
+        }
+    }
+
+    pub fn nudge_hue(&mut self, axis: FixAxis, degrees: f32) {
+        self.axis = axis;
+        match axis {
+            FixAxis::Fg => self.candidate_fg = self.candidate_fg.nudge_hue(degrees),
+            FixAxis::Bg => self.candidate_bg = self.candidate_bg.nudge_hue(degrees),
         }
     }
 

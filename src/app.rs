@@ -8,8 +8,8 @@ use crate::color::{Color, is_large_text};
 use crate::fix::{FixAxis, FixState};
 use crate::layout::{Hit, LayoutMap};
 use crate::palette::{
-    GeneratedPalette, PaletteInput, PaletteState, generate_palette, parse_palette_color,
-    validate_export,
+    GeneratedPalette, MatrixAxis, PaletteInput, PaletteState, generate_palette, matrix_cell,
+    parse_palette_color, validate_export,
 };
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
@@ -44,6 +44,10 @@ impl WcagLevel {
             Self::Aa => Self::Aaa,
             Self::Aaa => Self::Aa,
         }
+    }
+
+    pub fn cycle_back(self) -> Self {
+        self.cycle()
     }
 
     pub fn text_threshold(self, large: bool) -> f64 {
@@ -92,12 +96,31 @@ impl ApcaTarget {
             Self::Lc90 => Self::Lc45,
         }
     }
+
+    pub fn cycle_back(self) -> Self {
+        match self {
+            Self::Lc45 => Self::Lc90,
+            Self::Lc60 => Self::Lc45,
+            Self::Lc75 => Self::Lc60,
+            Self::Lc90 => Self::Lc75,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Targets {
     pub wcag: WcagLevel,
     pub apca: ApcaTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FixSource {
+    #[default]
+    Contrast,
+    Palette {
+        text: MatrixAxis,
+        surface: MatrixAxis,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -150,6 +173,8 @@ impl FocusId {
             FocusId::CopyHex,
             FocusId::FixBtn,
             FocusId::OpenPreview,
+            FocusId::TargetWcag,
+            FocusId::TargetApca,
         ]
     }
 
@@ -270,6 +295,7 @@ pub struct App {
     pub editing: bool,
     pub fix_open: bool,
     pub fix: FixState,
+    pub fix_source: FixSource,
     pub nudge_dragging: Option<FixAxis>,
     pub fix_send_chip: usize,
     pub targets: Targets,
@@ -328,6 +354,7 @@ impl App {
             editing: true,
             fix_open: false,
             fix: FixState::default(),
+            fix_source: FixSource::Contrast,
             nudge_dragging: None,
             fix_send_chip: 0,
             targets: Targets::default(),
@@ -465,11 +492,46 @@ impl App {
     }
 
     pub fn open_fix(&mut self) {
+        if self.mode == Mode::Palette {
+            self.open_fix_for_matrix();
+            return;
+        }
+        self.fix_source = FixSource::Contrast;
         self.fix_open = true;
         self.nudge_dragging = None;
         self.fix.axis = FixAxis::Fg;
         self.refresh_fix_search();
         self.set_focus(FocusId::NudgeFg);
+    }
+
+    pub fn open_fix_for_matrix(&mut self) {
+        let (wcag, apca) = self.contrast_thresholds();
+        let Some(cell) = matrix_cell(
+            &self.palette,
+            self.palette.matrix_row,
+            self.palette.matrix_col,
+            wcag,
+            apca,
+        ) else {
+            self.notify_error("Cannot open Fix: that matrix pair has an invalid color.");
+            return;
+        };
+        self.fix_source = FixSource::Palette {
+            text: cell.text,
+            surface: cell.surface,
+        };
+        self.fix_open = true;
+        self.nudge_dragging = None;
+        self.fix.axis = if cell.text.as_palette_input().is_none() {
+            FixAxis::Bg
+        } else {
+            FixAxis::Fg
+        };
+        self.fix.search(cell.fg, cell.bg, wcag, apca);
+        self.set_focus(match self.fix.axis {
+            FixAxis::Fg => FocusId::NudgeFg,
+            FixAxis::Bg => FocusId::NudgeBg,
+        });
     }
 
     pub fn close_fix(&mut self) {
@@ -485,7 +547,11 @@ impl App {
                 | FocusId::NextFix
                 | FocusId::CloseFix
         ) {
-            self.set_focus(FocusId::FixBtn);
+            if self.mode == Mode::Palette {
+                self.set_focus(FocusId::Matrix);
+            } else {
+                self.set_focus(FocusId::FixBtn);
+            }
         }
     }
 
@@ -493,28 +559,53 @@ impl App {
         if !self.fix_open {
             return;
         }
-        self.foreground = self.fix.candidate_fg;
-        self.background = self.fix.candidate_bg;
-        self.foreground_input = self.foreground.to_hex();
-        self.background_input = self.background.to_hex();
-        match self.focus {
-            FocusId::FgHex => {
-                self.current_input = self.foreground_input.clone();
-                self.cursor_char_idx = self.current_input.chars().count();
+        match self.fix_source {
+            FixSource::Contrast => {
+                self.foreground = self.fix.candidate_fg;
+                self.background = self.fix.candidate_bg;
+                self.foreground_input = self.foreground.to_hex();
+                self.background_input = self.background.to_hex();
+                match self.focus {
+                    FocusId::FgHex => {
+                        self.current_input = self.foreground_input.clone();
+                        self.cursor_char_idx = self.current_input.chars().count();
+                    }
+                    FocusId::BgHex => {
+                        self.current_input = self.background_input.clone();
+                        self.cursor_char_idx = self.current_input.chars().count();
+                    }
+                    _ => {}
+                }
+                self.update_contrast();
+                self.refresh_fix_search();
+                self.notify_status(format!(
+                    "Applied {} on {}",
+                    self.foreground.to_hex(),
+                    self.background.to_hex()
+                ));
             }
-            FocusId::BgHex => {
-                self.current_input = self.background_input.clone();
-                self.cursor_char_idx = self.current_input.chars().count();
+            FixSource::Palette { text, surface } => {
+                if let Some(role) = text.as_palette_input() {
+                    self.palette
+                        .set_role_hex(role, self.fix.candidate_fg.to_hex());
+                }
+                if let Some(role) = surface.as_palette_input() {
+                    self.palette
+                        .set_role_hex(role, self.fix.candidate_bg.to_hex());
+                }
+                let (wcag, apca) = self.contrast_thresholds();
+                if let Some(cell) =
+                    matrix_cell(&self.palette, text.index(), surface.index(), wcag, apca)
+                {
+                    self.fix.search(cell.fg, cell.bg, wcag, apca);
+                }
+                self.notify_status(format!(
+                    "Applied {} on {} to palette bases",
+                    self.fix.original_fg.to_hex(),
+                    self.fix.original_bg.to_hex()
+                ));
             }
-            _ => {}
         }
-        self.update_contrast();
-        self.refresh_fix_search();
-        self.notify_status(format!(
-            "Applied {} on {}",
-            self.foreground.to_hex(),
-            self.background.to_hex()
-        ));
     }
 
     pub fn next_fix_candidate(&mut self) {
@@ -529,6 +620,18 @@ impl App {
             return;
         }
         self.fix.nudge(axis, delta);
+        self.focus = match axis {
+            FixAxis::Fg => FocusId::NudgeFg,
+            FixAxis::Bg => FocusId::NudgeBg,
+        };
+        self.editing = false;
+    }
+
+    pub fn nudge_fix_hue(&mut self, axis: FixAxis, degrees: f32) {
+        if !self.fix_open {
+            return;
+        }
+        self.fix.nudge_hue(axis, degrees);
         self.focus = match axis {
             FixAxis::Fg => FocusId::NudgeFg,
             FixAxis::Bg => FocusId::NudgeBg,
@@ -725,6 +828,23 @@ impl App {
         self.insert_char_at_cursor('\n');
     }
 
+    pub fn insert_str_at_cursor(&mut self, s: &str) {
+        for c in s.chars() {
+            if c == '\r' {
+                continue;
+            }
+            self.insert_char_at_cursor(c);
+        }
+    }
+
+    pub fn move_cursor_home(&mut self) {
+        self.cursor_char_idx = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        self.cursor_char_idx = self.current_input.chars().count();
+    }
+
     pub fn backspace_at_cursor(&mut self) {
         self.clamp_cursor();
         if self.cursor_char_idx == 0 {
@@ -734,6 +854,47 @@ impl App {
         let start = Self::byte_index_at_char(&self.current_input, self.cursor_char_idx - 1);
         self.current_input.replace_range(start..end, "");
         self.cursor_char_idx -= 1;
+    }
+
+    pub fn delete_at_cursor(&mut self) {
+        self.clamp_cursor();
+        let len = self.current_input.chars().count();
+        if self.cursor_char_idx >= len {
+            return;
+        }
+        let start = Self::byte_index_at_char(&self.current_input, self.cursor_char_idx);
+        let end = Self::byte_index_at_char(&self.current_input, self.cursor_char_idx + 1);
+        self.current_input.replace_range(start..end, "");
+    }
+
+    /// Apply FG/BG draft when it parses. Incomplete input keeps the last committed color.
+    pub fn try_live_apply_color(&mut self) -> bool {
+        if !matches!(self.focus, FocusId::FgHex | FocusId::BgHex) {
+            return false;
+        }
+        let Ok((color, format_label)) = Color::parse_input(&self.current_input) else {
+            return false;
+        };
+        match self.focus {
+            FocusId::FgHex => {
+                self.foreground = color;
+                self.parsed_fg = Some(color);
+                self.foreground_input = self.current_input.clone();
+            }
+            FocusId::BgHex => {
+                self.background = color;
+                self.parsed_bg = Some(color);
+                self.background_input = self.current_input.clone();
+            }
+            _ => return false,
+        }
+        self.last_parsed_format = Some(format_label.to_string());
+        if self.error.is_some() {
+            self.error = None;
+            self.notification_updated_at = None;
+        }
+        self.update_contrast();
+        true
     }
 
     // Updates contrast ratio if both colors are parsed
@@ -765,48 +926,7 @@ impl App {
             return true;
         }
 
-        let input = self.current_input.trim();
-        let lower = input.to_lowercase();
-
-        let parse_result = if lower.starts_with("rgba(") {
-            Color::parse_rgb(input)
-                .map(|color| (color, "RGBA".to_string()))
-                .map_err(|err| format!("Invalid RGBA format: {err}"))
-        } else if lower.starts_with("rgb(") {
-            Color::parse_rgb(input)
-                .map(|color| (color, "RGB".to_string()))
-                .map_err(|err| format!("Invalid RGB format: {err}"))
-        } else if lower.starts_with("hsl(") {
-            Color::parse_hsl(input)
-                .map(|color| (color, "HSL".to_string()))
-                .map_err(|err| format!("Invalid HSL format: {err}"))
-        } else if input.starts_with('#') {
-            Color::parse_hex(input)
-                .map(|color| (color, "HEX".to_string()))
-                .map_err(|err| format!("Invalid HEX format: {err}"))
-        } else {
-            let maybe_hex = input.strip_prefix('#').unwrap_or(input);
-            if !maybe_hex.is_empty()
-                && maybe_hex.len() <= 6
-                && !input.contains('(')
-                && !input.contains(',')
-            {
-                Color::parse_hex(input)
-                    .map(|color| (color, "HEX".to_string()))
-                    .map_err(|err| format!("Invalid HEX format: {err}"))
-            } else {
-                let parsed = Color::parse_hex(input)
-                    .map(|color| (color, "HEX".to_string()))
-                    .or_else(|_| Color::parse_rgb(input).map(|color| (color, "RGB".to_string())))
-                    .or_else(|_| Color::parse_hsl(input).map(|color| (color, "HSL".to_string())));
-                parsed.map_err(|_| {
-                    "Invalid color input. Supported formats: HEX (#rgb/#rrggbb), RGB/RGBA, HSL."
-                        .to_string()
-                })
-            }
-        };
-
-        match parse_result {
+        match Color::parse_input(&self.current_input) {
             Ok((color, format_label)) => {
                 match self.input_target {
                     InputTarget::Foreground => {
@@ -823,7 +943,7 @@ impl App {
                     InputTarget::FontFamily => {}
                     InputTarget::None => {}
                 }
-                self.last_parsed_format = Some(format_label);
+                self.last_parsed_format = Some(format_label.to_string());
                 self.error = None;
                 self.notification_updated_at = None;
                 self.update_contrast();
@@ -846,6 +966,8 @@ impl App {
                 let advisory_count = generated.advisory_failures().len();
                 self.palette.generated = Some(generated);
                 self.palette.detail_scroll = 0;
+                let (wcag, apca) = self.contrast_thresholds();
+                self.palette.select_worst_failing_pair(wcag, apca);
                 self.error = None;
                 self.notify_status(format!(
                     "Palette generated: {blocking_count} blocking failure(s), {advisory_count} advisory warning(s)."
@@ -881,13 +1003,21 @@ impl App {
         self.notification_updated_at = None;
     }
 
-    pub fn expire_notification(&mut self, now: Instant) {
+    pub fn expire_notification(&mut self, now: Instant) -> bool {
         if self
             .notification_updated_at
             .is_some_and(|updated_at| now.duration_since(updated_at) >= TOAST_TTL)
         {
             self.clear_notification();
+            true
+        } else {
+            false
         }
+    }
+
+    pub fn toast_remaining(&self, now: Instant) -> Option<Duration> {
+        let updated_at = self.notification_updated_at?;
+        Some(TOAST_TTL.saturating_sub(now.duration_since(updated_at)))
     }
 }
 
@@ -1052,11 +1182,73 @@ mod tests {
         app.notify_status("Saved");
         app.notification_updated_at = Some(now);
 
-        app.expire_notification(now + Duration::from_secs(4));
+        assert!(!app.expire_notification(now + Duration::from_secs(4)));
         assert!(app.status.is_some());
 
-        app.expire_notification(now + TOAST_TTL);
+        assert!(app.expire_notification(now + TOAST_TTL));
         assert!(app.status.is_none());
         assert!(app.error.is_none());
+    }
+
+    #[test]
+    fn live_apply_updates_valid_hex_and_ignores_partial() {
+        let mut app = App::new();
+        app.set_focus(FocusId::FgHex);
+        let original = app.foreground.to_hex();
+
+        app.current_input = "#0f".to_string();
+        assert!(!app.try_live_apply_color());
+        assert_eq!(app.foreground.to_hex(), original);
+        assert!(app.error.is_none());
+
+        app.current_input = "#00ff00".to_string();
+        assert!(app.try_live_apply_color());
+        assert_eq!(app.foreground.to_hex(), "#00ff00");
+    }
+
+    #[test]
+    fn delete_and_home_end_edit_at_caret() {
+        let mut app = App::new();
+        app.set_input_target(InputTarget::PreviewText);
+        app.current_input = "abcd".to_string();
+        app.cursor_char_idx = 1;
+        app.delete_at_cursor();
+        assert_eq!(app.current_input, "acd");
+        app.move_cursor_end();
+        assert_eq!(app.cursor_char_idx, 3);
+        app.move_cursor_home();
+        assert_eq!(app.cursor_char_idx, 0);
+    }
+
+    #[test]
+    fn apply_fix_from_text_on_primary_does_not_rewrite_text_token() {
+        let mut app = App::new();
+        app.set_mode(Mode::Palette);
+        app.palette.primary_input = "#808080".to_string();
+        app.palette
+            .set_matrix(MatrixAxis::Text.index(), MatrixAxis::Primary.index());
+        app.open_fix_for_matrix();
+        assert!(app.fix_open);
+        assert!(matches!(
+            app.fix_source,
+            FixSource::Palette {
+                text: MatrixAxis::Text,
+                surface: MatrixAxis::Primary
+            }
+        ));
+        assert_eq!(app.fix.axis, crate::fix::FixAxis::Bg);
+        let secondary = app.palette.secondary_input.clone();
+        let support = app.palette.support_input.clone();
+        app.apply_fix();
+        assert_eq!(app.palette.secondary_input, secondary);
+        assert_eq!(app.palette.support_input, support);
+        assert_ne!(app.palette.primary_input, "#808080");
+    }
+
+    #[test]
+    fn generate_selects_an_off_diagonal_matrix_pair() {
+        let mut app = App::new();
+        assert!(app.generate_palette());
+        assert_ne!(app.palette.matrix_row, app.palette.matrix_col);
     }
 }

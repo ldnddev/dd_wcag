@@ -645,6 +645,23 @@ mod tests {
     }
 
     #[test]
+    fn matrix_cells_are_hit_including_diagonal() {
+        let mut map = LayoutMap {
+            matrix_cells: [[Rect::default(); 5]; 5],
+            ..LayoutMap::default()
+        };
+        for row in 0..5 {
+            for col in 0..5 {
+                map.matrix_cells[row][col] = r(10 + (col as u16) * 6, 4 + row as u16, 5, 1);
+            }
+        }
+        assert_eq!(map.hit(11, 4), Some(Hit::MatrixCell(0, 0)));
+        assert_eq!(map.hit(17, 5), Some(Hit::MatrixCell(1, 1)));
+        assert_eq!(map.hit(23, 6), Some(Hit::MatrixCell(2, 2)));
+        assert_eq!(map.hit(11, 7), Some(Hit::MatrixCell(3, 0)));
+    }
+
+    #[test]
     fn wide_fix_split_steals_a_bottom_strip() {
         let body = r(0, 3, 120, 24);
         let (main, fix) = split_body_with_fix(body, Breakpoint::Wide, true);

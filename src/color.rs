@@ -84,6 +84,56 @@ impl Color {
         Ok(Color(hsl.into_color()))
     }
 
+    /// Parse `#hex`, `rgb()` / `rgba()`, or `hsl()`. Returns the color and a format label.
+    pub fn parse_input(s: &str) -> std::result::Result<(Self, &'static str), String> {
+        let input = s.trim();
+        if input.is_empty() {
+            return Err("Empty color".to_string());
+        }
+        let lower = input.to_lowercase();
+
+        if lower.starts_with("rgba(") {
+            return Color::parse_rgb(input)
+                .map(|color| (color, "RGBA"))
+                .map_err(|err| format!("Invalid RGBA format: {err}"));
+        }
+        if lower.starts_with("rgb(") {
+            return Color::parse_rgb(input)
+                .map(|color| (color, "RGB"))
+                .map_err(|err| format!("Invalid RGB format: {err}"));
+        }
+        if lower.starts_with("hsl(") {
+            return Color::parse_hsl(input)
+                .map(|color| (color, "HSL"))
+                .map_err(|err| format!("Invalid HSL format: {err}"));
+        }
+        if input.starts_with('#') {
+            return Color::parse_hex(input)
+                .map(|color| (color, "HEX"))
+                .map_err(|err| format!("Invalid HEX format: {err}"));
+        }
+
+        let maybe_hex = input.strip_prefix('#').unwrap_or(input);
+        if !maybe_hex.is_empty()
+            && maybe_hex.len() <= 6
+            && !input.contains('(')
+            && !input.contains(',')
+        {
+            return Color::parse_hex(input)
+                .map(|color| (color, "HEX"))
+                .map_err(|err| format!("Invalid HEX format: {err}"));
+        }
+
+        Color::parse_hex(input)
+            .map(|color| (color, "HEX"))
+            .or_else(|_| Color::parse_rgb(input).map(|color| (color, "RGB")))
+            .or_else(|_| Color::parse_hsl(input).map(|color| (color, "HSL")))
+            .map_err(|_| {
+                "Invalid color input. Supported formats: HEX (#rgb/#rrggbb), RGB/RGBA, HSL."
+                    .to_string()
+            })
+    }
+
     pub fn rgb_u8(&self) -> (u8, u8, u8) {
         (
             (self.0.red * 255.0) as u8,
@@ -135,6 +185,17 @@ impl Color {
 
     pub fn nudge_oklab_l(self, delta: f32) -> Color {
         self.with_oklab_l(self.oklab_l() + delta)
+    }
+
+    pub fn nudge_hue(self, degrees: f32) -> Color {
+        let mut hsl: Hsl = self.0.into_color();
+        hsl.hue += degrees;
+        let rgb: Srgb = hsl.into_color();
+        Color(Srgb::new(
+            rgb.red.clamp(0.0, 1.0),
+            rgb.green.clamp(0.0, 1.0),
+            rgb.blue.clamp(0.0, 1.0),
+        ))
     }
 
     pub fn contrast_ratio(&self, other: &Color) -> f64 {
@@ -294,5 +355,29 @@ mod tests {
         assert!((darker_lab.b - start.b).abs() < 0.02);
         assert!(gray.with_oklab_l(-1.0).oklab_l() < 0.05);
         assert!(gray.with_oklab_l(9.0).oklab_l() > 0.95);
+    }
+
+    #[test]
+    fn parse_input_accepts_hex_rgb_and_hsl() {
+        let (hex, hex_fmt) = Color::parse_input("#0f0").unwrap();
+        assert_eq!(hex.to_hex(), "#00ff00");
+        assert_eq!(hex_fmt, "HEX");
+
+        let (rgb, rgb_fmt) = Color::parse_input("rgb(255,0,0)").unwrap();
+        assert_eq!(rgb.to_hex(), "#ff0000");
+        assert_eq!(rgb_fmt, "RGB");
+
+        let (hsl, hsl_fmt) = Color::parse_input("hsl(240,100,50)").unwrap();
+        assert_eq!(hsl.to_hex(), "#0000ff");
+        assert_eq!(hsl_fmt, "HSL");
+    }
+
+    #[test]
+    fn nudge_hue_rotates_without_leaving_gamut() {
+        let red = Color::parse_hex("#ff0000").unwrap();
+        let shifted = red.nudge_hue(120.0);
+        let hsl: Hsl = shifted.0.into_color();
+        let hue = hsl.hue.into_positive_degrees();
+        assert!((hue - 120.0).abs() < 2.0);
     }
 }

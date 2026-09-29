@@ -48,6 +48,7 @@ cargo run
 - Fix pane nudges OKLab lightness toward a passing candidate
 - Browser preview (`Ctrl+O`) at `/tmp/dd_wcag_preview.html` for true CSS pixel size
 - Palette builder from Primary / Secondary / Tertiary (optional Support) → WCAG-gated `_palette.scss` and Penpot/Figma `_palette.tokens.json`
+- Directed pair matrix of the five conceptual colors (text \\ surface); Enter or double-click a failing cell to Fix that pair
 
 ## Everyday keys
 
@@ -60,6 +61,7 @@ cargo run
 | `Ctrl+O` | Open browser preview |
 | `Ctrl+S` | Contrast: cycle style · Palette: save SCSS + Penpot/Figma tokens JSON |
 | `Ctrl+C` | Contrast: copy hex · Palette: copy SCSS |
+| `Ctrl+V` | Paste into the focused field (a valid color replaces the field) |
 | `F1` / `F2` | Keys & mouse · Theme inspector |
 | `Esc` | Blur / close popups (does not quit) |
 | `Ctrl+Q` | Quit |

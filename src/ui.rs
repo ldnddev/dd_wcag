@@ -2,11 +2,15 @@ use crate::app::{App, FocusId, Mode};
 use crate::contrast::render_contrast;
 use crate::fix::PairVerdict;
 use crate::layout::{
-    LayoutMap, breakpoint, caret_line, centered, split_body_with_fix, split_header, split_shell,
+    Hit, LayoutMap, breakpoint, caret_line, centered, split_body_with_fix, split_header,
+    split_shell,
+};
+use crate::palette::{
+    MatrixAxis, matrix_cell, matrix_text_swatch, off_diagonal_pairs, pair_list_index,
 };
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -72,10 +76,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             }
         }
         Mode::Palette => {
-            let (detail, scrollbar, roles) = render_palette_tab(frame, app, main);
-            map.detail = detail;
-            map.detail_scrollbar = scrollbar;
-            map.role_rows = roles;
+            render_palette_tab(frame, app, main, &mut map);
         }
     }
 
@@ -227,9 +228,9 @@ fn render_fix(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap, ove
         app,
         now,
         "NOW",
-        app.foreground,
-        app.background,
-        PairVerdict::of(app.foreground, app.background, wcag_th, apca_bar),
+        app.fix.original_fg,
+        app.fix.original_bg,
+        PairVerdict::of(app.fix.original_fg, app.fix.original_bg, wcag_th, apca_bar),
     );
     paint_fix_pair(
         frame,
@@ -502,15 +503,32 @@ fn cursor_position(app: &App, map: &LayoutMap) -> Option<(u16, u16)> {
     Some((x, area.y))
 }
 
-fn render_palette_tab(frame: &mut Frame, app: &mut App, area: Rect) -> (Rect, Rect, [Rect; 4]) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(area);
-
-    let roles = render_palette_inputs(frame, app, chunks[0]);
-    let scrollbar = render_palette_detail(frame, app, chunks[1]);
-    (chunks[1], scrollbar, roles)
+fn render_palette_tab(frame: &mut Frame, app: &mut App, area: Rect, map: &mut LayoutMap) {
+    if map.breakpoint.contrast_side_by_side() {
+        let roles_w = match map.breakpoint {
+            crate::layout::Breakpoint::Wide => 28,
+            _ => 24,
+        };
+        let [roles, right] =
+            Layout::horizontal([Constraint::Length(roles_w), Constraint::Fill(1)]).areas(area);
+        render_palette_inputs(frame, app, roles, map);
+        let [matrix, detail] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).areas(right);
+        render_palette_matrix(frame, app, matrix, map);
+        map.detail_scrollbar = render_palette_detail(frame, app, detail);
+        map.detail = detail;
+    } else {
+        let [roles, pairs, detail] = Layout::vertical([
+            Constraint::Length(8),
+            Constraint::Fill(1),
+            Constraint::Length(6),
+        ])
+        .areas(area);
+        render_palette_inputs(frame, app, roles, map);
+        render_palette_pair_list(frame, app, pairs, map);
+        map.detail_scrollbar = render_palette_detail(frame, app, detail);
+        map.detail = detail;
+    }
 }
 
 fn palette_caret_style(app: &App) -> Style {
@@ -520,15 +538,24 @@ fn palette_caret_style(app: &App) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] {
+fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap) {
+    let roles_focused = matches!(app.focus, FocusId::Role(_));
     frame.render_widget(
         Block::default()
             .title(Line::styled(
-                "Palette Inputs",
-                Style::default().fg(app.theme.text_labels_color()),
+                "Roles",
+                Style::default().fg(if roles_focused {
+                    app.theme.text_active_focus_color()
+                } else {
+                    app.theme.text_labels_color()
+                }),
             ))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(app.theme.border_default_color()))
+            .border_style(Style::default().fg(if roles_focused {
+                app.theme.border_active_color()
+            } else {
+                app.theme.border_default_color()
+            }))
             .style(
                 Style::default()
                     .fg(app.theme.text_primary_color())
@@ -548,7 +575,12 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] 
             width: inner.width,
             height: 1,
         };
+        if row.y >= inner.y.saturating_add(inner.height) {
+            break;
+        }
         role_rows[i] = row;
+        let [text, swatch] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(2)]).areas(row);
         let marker = if *input == selected { ">" } else { " " };
         let required = if input.required() { "*" } else { " " };
         let prefix = format!("{marker} {:<9}{required} ", input.label());
@@ -557,7 +589,8 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] 
         } else {
             app.palette.input_for(*input)
         };
-        let style = if *input == selected {
+        let focused = app.focus == FocusId::Role(i);
+        let style = if focused || *input == selected {
             Style::default()
                 .fg(app.theme.text_active_focus_color())
                 .bg(app.theme.selected_background_color())
@@ -573,50 +606,468 @@ fn render_palette_inputs(frame: &mut Frame, app: &App, area: Rect) -> [Rect; 4] 
         } else {
             Line::styled(format!("{prefix}{value}"), style)
         };
-        frame.render_widget(Paragraph::new(line).style(style), row);
-    }
-
-    let help_y = inner.y.saturating_add(5);
-    if help_y < inner.y.saturating_add(inner.height) {
-        let help = Rect {
-            x: inner.x,
-            y: help_y,
-            width: inner.width,
-            height: inner.height.saturating_sub(help_y.saturating_sub(inner.y)),
-        };
+        frame.render_widget(Paragraph::new(line).style(style), text);
+        let swatch_color = crate::palette::parse_palette_color(value)
+            .ok()
+            .map(|c| c.to_tui_color())
+            .unwrap_or_else(|| app.theme.body_background_color());
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from("* required   Text roles are fixed"),
-                Line::from("Enter: edit   Ctrl+G: generate"),
-                Line::from("Ctrl+S: save SCSS + tokens JSON   Ctrl+C: copy SCSS"),
-            ])
-            .style(
-                Style::default()
-                    .fg(app.theme.text_secondary_color())
-                    .bg(app.theme.body_background_color()),
-            ),
-            help,
+            Paragraph::new("  ").style(Style::default().bg(swatch_color)),
+            swatch,
         );
     }
-    role_rows
+    map.role_rows = role_rows;
+
+    let text_y = inner.y.saturating_add(4);
+    if text_y < inner.y.saturating_add(inner.height) {
+        let row = Rect {
+            x: inner.x,
+            y: text_y,
+            width: inner.width,
+            height: 1,
+        };
+        map.text_row = row;
+        let [text, swatch] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(2)]).areas(row);
+        let text_selected = app.palette.matrix_text() == MatrixAxis::Text
+            || app.palette.matrix_surface() == MatrixAxis::Text;
+        let style = if text_selected {
+            Style::default()
+                .fg(app.theme.text_active_focus_color())
+                .bg(app.theme.selected_background_color())
+        } else {
+            Style::default()
+                .fg(app.theme.text_secondary_color())
+                .bg(app.theme.body_background_color())
+        };
+        let hex = matrix_text_swatch().to_hex();
+        frame.render_widget(
+            Paragraph::new(format!("  {:<9}  {hex}", "Text")).style(style),
+            text,
+        );
+        frame.render_widget(
+            Paragraph::new("  ").style(Style::default().bg(matrix_text_swatch().to_tui_color())),
+            swatch,
+        );
+    }
+
+    let controls_y = inner.y.saturating_add(5);
+    if controls_y < inner.y.saturating_add(inner.height) {
+        let row = Rect {
+            x: inner.x,
+            y: controls_y,
+            width: inner.width,
+            height: 1,
+        };
+        render_palette_size_weight(frame, app, row, map);
+    }
+
+    let actions_y = inner.y.saturating_add(6);
+    if actions_y < inner.y.saturating_add(inner.height) {
+        let row = Rect {
+            x: inner.x,
+            y: actions_y,
+            width: inner.width,
+            height: 1,
+        };
+        let [generate, web] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(row);
+        map.generate_btn = generate;
+        map.web_btn = web;
+        paint_palette_button(
+            frame,
+            app,
+            generate,
+            "Generate",
+            app.focus == FocusId::Generate,
+            matches!(app.hovered, Some(Hit::Generate)),
+        );
+        paint_palette_button(
+            frame,
+            app,
+            web,
+            "Web",
+            app.focus == FocusId::OpenPreview,
+            matches!(app.hovered, Some(Hit::WebBtn)),
+        );
+    }
+}
+
+fn render_palette_size_weight(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap) {
+    let [size_side, wt_side] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+    let [size_lab, size_in, size_dec, size_inc] = Layout::horizontal([
+        Constraint::Length(5),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(size_side);
+    let [wt_lab, wt_in, wt_dec, wt_inc] = Layout::horizontal([
+        Constraint::Length(3),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(wt_side);
+
+    let size_focused = app.focus == FocusId::Size;
+    let wt_focused = app.focus == FocusId::Weight;
+    let label_style = Style::default()
+        .fg(app.theme.text_labels_color())
+        .bg(app.theme.body_background_color());
+    frame.render_widget(Paragraph::new("Size ").style(label_style), size_lab);
+    frame.render_widget(Paragraph::new("Wt ").style(label_style), wt_lab);
+    paint_palette_value(
+        frame,
+        app,
+        size_in,
+        &app.font_size_px.to_string(),
+        size_focused,
+    );
+    paint_palette_value(frame, app, wt_in, &app.weight.to_string(), wt_focused);
+    paint_palette_stepper(frame, app, size_dec, "↓", size_focused);
+    paint_palette_stepper(frame, app, size_inc, "↑", size_focused);
+    paint_palette_stepper(frame, app, wt_dec, "↓", wt_focused);
+    paint_palette_stepper(frame, app, wt_inc, "↑", wt_focused);
+    map.size_input = size_in;
+    map.size_dec = size_dec;
+    map.size_inc = size_inc;
+    map.weight_input = wt_in;
+    map.weight_dec = wt_dec;
+    map.weight_inc = wt_inc;
+}
+
+fn paint_palette_value(frame: &mut Frame, app: &App, area: Rect, text: &str, focused: bool) {
+    let style = if focused {
+        Style::default()
+            .fg(app.theme.input_text_focus_color())
+            .bg(app.theme.selected_background_color())
+    } else {
+        Style::default()
+            .fg(app.theme.input_text_default_color())
+            .bg(app.theme.body_background_color())
+    };
+    frame.render_widget(Paragraph::new(text).style(style), area);
+}
+
+fn paint_palette_stepper(frame: &mut Frame, app: &App, area: Rect, glyph: &str, focused: bool) {
+    let style = if focused {
+        Style::default().fg(app.theme.text_active_focus_color())
+    } else {
+        Style::default().fg(app.theme.text_secondary_color())
+    };
+    frame.render_widget(Paragraph::new(glyph).style(style), area);
+}
+
+fn paint_palette_button(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    label: &str,
+    focused: bool,
+    hovered: bool,
+) {
+    let mut style = if focused {
+        Style::default()
+            .fg(app.theme.text_active_focus_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.text_secondary_color())
+    };
+    if hovered {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    frame.render_widget(Paragraph::new(format!("[{label}]")).style(style), area);
+}
+
+fn render_palette_matrix(frame: &mut Frame, app: &App, area: Rect, map: &mut LayoutMap) {
+    let focused = app.focus == FocusId::Matrix;
+    frame.render_widget(
+        Block::default()
+            .title(Line::styled(
+                "Pairs  text \\ surface",
+                Style::default().fg(if focused {
+                    app.theme.text_active_focus_color()
+                } else {
+                    app.theme.text_labels_color()
+                }),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if focused {
+                app.theme.border_active_color()
+            } else {
+                app.theme.border_default_color()
+            }))
+            .style(Style::default().bg(app.theme.body_background_color())),
+        area,
+    );
+    let inner = area.inner(ratatui::layout::Margin::new(1, 1));
+    map.matrix_area = inner;
+    if inner.width < 12 || inner.height < 6 {
+        return;
+    }
+    let header_h = 1u16;
+    let body_h = inner.height.saturating_sub(header_h);
+    let row_h = if body_h >= 10 { 2 } else { 1 };
+    let [gutter, rest] =
+        Layout::horizontal([Constraint::Length(5), Constraint::Fill(1)]).areas(inner);
+    let cols: [Rect; 5] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+    ])
+    .areas(rest);
+
+    let header_style = Style::default()
+        .fg(app.theme.text_labels_color())
+        .bg(app.theme.body_background_color());
+    for (i, axis) in MatrixAxis::ALL.iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(axis.short_label()).style(header_style),
+            Rect {
+                x: cols[i].x,
+                y: inner.y,
+                width: cols[i].width,
+                height: 1,
+            },
+        );
+    }
+
+    let (wcag_th, apca_bar) = app.contrast_thresholds();
+    for r in 0..5 {
+        let y = inner
+            .y
+            .saturating_add(header_h)
+            .saturating_add((r as u16) * row_h);
+        if y >= inner.y.saturating_add(inner.height) {
+            break;
+        }
+        let h = row_h.min(inner.y.saturating_add(inner.height).saturating_sub(y));
+        frame.render_widget(
+            Paragraph::new(MatrixAxis::from_index(r).short_label()).style(header_style),
+            Rect {
+                x: gutter.x,
+                y,
+                width: gutter.width,
+                height: h,
+            },
+        );
+        for c in 0..5 {
+            let cell_rect = Rect {
+                x: cols[c].x,
+                y,
+                width: cols[c].width,
+                height: h,
+            };
+            map.matrix_cells[r][c] = cell_rect;
+            let selected = app.palette.matrix_row == r && app.palette.matrix_col == c;
+            let hovered =
+                matches!(app.hovered, Some(Hit::MatrixCell(hr, hc)) if hr == r && hc == c);
+            if r == c {
+                frame.render_widget(
+                    Paragraph::new(" · ").style(
+                        Style::default()
+                            .fg(app.theme.text_secondary_color())
+                            .bg(app.theme.body_background_color()),
+                    ),
+                    cell_rect,
+                );
+                continue;
+            }
+            let Some(cell) = matrix_cell(&app.palette, r, c, wcag_th, apca_bar) else {
+                frame.render_widget(
+                    Paragraph::new(" ? ").style(
+                        Style::default()
+                            .fg(app.theme.warning_color())
+                            .bg(app.theme.body_background_color()),
+                    ),
+                    cell_rect,
+                );
+                continue;
+            };
+            let glyph = cell.glyph();
+            let glyph_color = match glyph {
+                '✓' => app.theme.success_color(),
+                '✗' => app.theme.error_color(),
+                _ => app.theme.warning_color(),
+            };
+            let mut bg = app.theme.body_background_color();
+            let mut fg = app.theme.text_primary_color();
+            if selected {
+                bg = app.theme.selected_background_color();
+                fg = app.theme.text_active_focus_color();
+            }
+            let mut glyph_style = Style::default().fg(glyph_color).bg(bg);
+            if hovered {
+                glyph_style = glyph_style.add_modifier(Modifier::UNDERLINED);
+            }
+            let lines = if h >= 2 {
+                vec![
+                    Line::from(Span::styled(format!(" {glyph}"), glyph_style)),
+                    Line::from(Span::styled(
+                        format!(" {:.1}", cell.ratio),
+                        Style::default().fg(fg).bg(bg),
+                    )),
+                ]
+            } else {
+                vec![Line::from(Span::styled(format!(" {glyph}"), glyph_style))]
+            };
+            frame.render_widget(
+                Paragraph::new(lines).style(Style::default().bg(bg)),
+                cell_rect,
+            );
+        }
+    }
+}
+
+fn render_palette_pair_list(frame: &mut Frame, app: &mut App, area: Rect, map: &mut LayoutMap) {
+    let focused = app.focus == FocusId::Matrix;
+    frame.render_widget(
+        Block::default()
+            .title(Line::styled(
+                "Pairs",
+                Style::default().fg(if focused {
+                    app.theme.text_active_focus_color()
+                } else {
+                    app.theme.text_labels_color()
+                }),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if focused {
+                app.theme.border_active_color()
+            } else {
+                app.theme.border_default_color()
+            }))
+            .style(Style::default().bg(app.theme.body_background_color())),
+        area,
+    );
+    let inner = area.inner(ratatui::layout::Margin::new(1, 1));
+    map.pair_list = inner;
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let (wcag_th, apca_bar) = app.contrast_thresholds();
+    let pairs = off_diagonal_pairs();
+    let visible = inner.height as usize;
+    app.palette.pair_max_scroll = pairs.len().saturating_sub(visible);
+    if let Some(idx) = pair_list_index(app.palette.matrix_row, app.palette.matrix_col) {
+        if idx < app.palette.pair_scroll {
+            app.palette.pair_scroll = idx;
+        } else if visible > 0 && idx >= app.palette.pair_scroll + visible {
+            app.palette.pair_scroll = idx + 1 - visible;
+        }
+    }
+    app.palette.pair_scroll = app.palette.pair_scroll.min(app.palette.pair_max_scroll);
+    let scroll = app.palette.pair_scroll;
+    for (i, &(r, c)) in pairs.iter().skip(scroll).take(visible).enumerate() {
+        let row = Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(i as u16),
+            width: inner.width,
+            height: 1,
+        };
+        let selected = app.palette.matrix_row == r && app.palette.matrix_col == c;
+        let text = MatrixAxis::from_index(r).short_label();
+        let surface = MatrixAxis::from_index(c).short_label();
+        let (body, style) = match matrix_cell(&app.palette, r, c, wcag_th, apca_bar) {
+            Some(cell) => {
+                let glyph = cell.glyph();
+                let color = match glyph {
+                    '✓' => app.theme.success_color(),
+                    '✗' => app.theme.error_color(),
+                    _ => app.theme.warning_color(),
+                };
+                let line = format!(
+                    "{text} on {surface}  {:.2}{glyph}  Lc{:.0}{glyph}",
+                    cell.ratio, cell.lc
+                );
+                let st = if selected {
+                    Style::default()
+                        .fg(app.theme.text_active_focus_color())
+                        .bg(app.theme.selected_background_color())
+                } else {
+                    Style::default()
+                        .fg(color)
+                        .bg(app.theme.body_background_color())
+                };
+                (line, st)
+            }
+            None => (
+                format!("{text} on {surface}  ?"),
+                Style::default()
+                    .fg(app.theme.warning_color())
+                    .bg(app.theme.body_background_color()),
+            ),
+        };
+        frame.render_widget(Paragraph::new(body).style(style), row);
+    }
 }
 
 fn render_palette_detail(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
-    let selected = app.palette.selected();
-    let mut lines: Vec<Line> = vec![
-        Line::from(vec![
-            Span::styled(
-                selected.label(),
-                Style::default()
-                    .fg(app.theme.text_active_focus_color())
-                    .add_modifier(Modifier::BOLD),
+    let selected = app.palette.selected_family();
+    let (wcag_th, apca_bar) = app.contrast_thresholds();
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(cell) = matrix_cell(
+        &app.palette,
+        app.palette.matrix_row,
+        app.palette.matrix_col,
+        wcag_th,
+        apca_bar,
+    ) {
+        let glyph = cell.glyph();
+        let color = match glyph {
+            '✓' => app.theme.success_color(),
+            '✗' => app.theme.error_color(),
+            _ => app.theme.warning_color(),
+        };
+        lines.push(Line::from(vec![Span::styled(
+            format!("{} on {}", cell.text.label(), cell.surface.label()),
+            Style::default()
+                .fg(app.theme.text_active_focus_color())
+                .add_modifier(Modifier::BOLD),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "WCAG {:.2} {glyph}   APCA Lc {:.0} {glyph}",
+                cell.ratio, cell.lc
             ),
-            Span::raw(" theme builder"),
-        ]),
-        Line::from(format!("Base: {}", app.palette.selected_input())),
-    ];
+            Style::default().fg(color),
+        )]));
+        lines.push(Line::from(format!(
+            "needs ≥ {wcag_th:.1}:1 and |Lc| ≥ {apca_bar:.0}"
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(
+                " Aa sample ",
+                Style::default()
+                    .fg(cell.fg.to_tui_color())
+                    .bg(cell.bg.to_tui_color()),
+            ),
+            Span::raw(format!("  {} on {}", cell.fg.to_hex(), cell.bg.to_hex())),
+        ]));
+    } else {
+        lines.push(Line::from("Selected pair has an invalid color."));
+    }
 
-    match crate::palette::parse_palette_color(app.palette.selected_input()) {
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            selected.label(),
+            Style::default()
+                .fg(app.theme.text_active_focus_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" theme builder"),
+    ]));
+    lines.push(Line::from(format!(
+        "Base: {}",
+        app.palette.input_for(selected)
+    )));
+
+    match crate::palette::parse_palette_color(app.palette.input_for(selected)) {
         Ok(color) => {
             lines.push(Line::from(format!("Hex:  {}", color.to_hex())));
             lines.push(Line::from(format!("RGB:  {}", color.to_rgb_str())));
@@ -924,6 +1375,10 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         ),
         Line::from("Left / Right: caret in a text field; Style chips: previous/next preset"),
         Line::from("Up / Down: Size/Weight step; Style chips: previous/next; Palette list scroll"),
+        Line::from("Home / End / Delete: caret and forward-delete in a text field"),
+        Line::from(
+            "Ctrl+V or terminal paste: paste into the focused field (valid color replaces it)",
+        ),
         Line::from("Ctrl+Up / Ctrl+Down: step the focused Size, Weight, Style, or Fix gauge"),
         Line::from("Shift+Ctrl+Up / Shift+Ctrl+Down: larger step (size ±4, weight ±200)"),
         Line::from(
@@ -938,9 +1393,10 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Left/Right or Up/Down on Style: select a chip (underlined = keyboard focus)"),
         Line::from("Ctrl+B: toggle bold (400↔700)   Ctrl+T: cycle font family presets"),
         Line::from("Space: swap FG/BG (on Style: apply the focused chip)"),
-        Line::from("Ctrl+C: copy focused hex   Ctrl+F: toggle Fix pane   Ctrl+O: web preview"),
+        Line::from("Ctrl+C: copy focused hex   Ctrl+V: paste   Ctrl+F: Fix   Ctrl+O: web preview"),
+        Line::from("Click WCAG / APCA (or Tab there, then Enter/←/→): cycle AA↔AAA / Lc45–90"),
         Line::from(
-            "Fix: Ctrl+N next candidate  Enter Apply/Next/Close  [ ] nudge OKLab L  drag gauges",
+            "Fix: Ctrl+N next candidate  Enter Apply/Next/Close  [ ] lightness  { } hue  drag gauges",
         ),
         Line::from(
             "Fix → Palette: FG→ / BG→ chips set Pri/Sec/Ter/Sup. p/s/t/u send the focused axis",
@@ -949,9 +1405,11 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Mouse wheel over the left column: scroll (size/weight still step)"),
         Line::from(""),
         Line::from("Palette"),
-        Line::from("Ctrl+G: generate full _palette.scss (focuses the detail list to scroll)"),
-        Line::from("Enter: begin/commit role edit   Up/Down: select role; Detail: scroll"),
-        Line::from("PageUp / PageDown: scroll generated output (Contrast: left column)"),
+        Line::from("Ctrl+G: generate _palette.scss and select the worst failing pair"),
+        Line::from("Enter: edit role / generate / open Fix for the selected matrix pair"),
+        Line::from("Arrows on the matrix skip the diagonal   Space: swap text \\ surface"),
+        Line::from("Click a cell to select it   Double-click or Enter: open Fix"),
+        Line::from("Click Text: select the Text axis   PageUp/Down: scroll generated output"),
         Line::from("Ctrl+S: save SCSS + Penpot/Figma tokens JSON   Ctrl+C: copy SCSS"),
         Line::from(""),
         Line::from("F1: this help   F2: theme source and tokens"),
@@ -961,7 +1419,7 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Click ↓/↑: step size or weight   Wheel over size/weight: same as Ctrl+Up/Down"),
         Line::from("Click a style chip: apply it   Click Swap / Copy / Fix / Web: that action"),
         Line::from("Click toast: dismiss   Click outside F1/F2: close"),
-        Line::from("Shift+click a swatch: copy that hex"),
+        Line::from("Shift+click a swatch: copy that hex   Drag a scrollbar: jump in the list"),
     ];
     frame.render_widget(
         Paragraph::new(lines)
