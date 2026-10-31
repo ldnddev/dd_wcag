@@ -2,18 +2,18 @@ use crate::app::{App, FocusId, Mode};
 use crate::contrast::render_contrast;
 use crate::fix::PairVerdict;
 use crate::layout::{
-    Hit, LayoutMap, breakpoint, caret_line, centered, split_body_with_fix, split_header,
-    split_shell,
+    breakpoint, caret_line, centered, split_body_with_fix, split_header, split_shell, Hit,
+    LayoutMap,
 };
 use crate::palette::{
-    MatrixAxis, matrix_cell, matrix_text_swatch, off_diagonal_pairs, pair_list_index,
+    matrix_cell, matrix_text_swatch, off_diagonal_pairs, pair_list_index, MatrixAxis,
 };
 
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::Frame;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
@@ -1219,39 +1219,28 @@ fn render_palette_detail(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
 }
 
 fn render_toast(frame: &mut Frame, app: &App, area: Rect) -> Option<Rect> {
-    let (title, message, border_color) = if let Some(error) = &app.error {
-        ("Error", error.as_str(), app.theme.error_color())
+    let (kind, message) = if let Some(error) = &app.error {
+        (crate::toast_chrome::ToastKind::Error, error.as_str())
     } else if let Some(status) = &app.status {
-        ("Status", status.as_str(), app.theme.info_color())
+        (app.status_level, status.as_str())
     } else {
         return None;
     };
-
-    let line_count = message.lines().count().max(1) as u16;
-    let toast =
-        crate::layout::bottom_right_rect(area, 32, line_count.saturating_add(2).clamp(3, 4));
-    frame.render_widget(Clear, toast);
-    frame.render_widget(
-        Paragraph::new(message)
-            .style(
-                Style::default()
-                    .fg(app.theme.modal_text_color())
-                    .bg(app.theme.modal_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title(Line::styled(
-                        title,
-                        Style::default().fg(app.theme.modal_labels_color()),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color))
-                    .style(Style::default().bg(app.theme.modal_background_color())),
-            )
-            .wrap(Wrap { trim: true }),
-        toast,
+    let areas = crate::toast_chrome::render_toast_stack(
+        frame,
+        area,
+        &[crate::toast_chrome::ToastLine { kind, message }],
+        crate::toast_chrome::ToastPaint {
+            modal_background: app.theme.modal_background_color(),
+            text: app.theme.text_primary_color(),
+            success: app.theme.success_color(),
+            info: app.theme.info_color(),
+            warning: app.theme.warning_color(),
+            error: app.theme.error_color(),
+        },
+        0,
     );
-    Some(toast)
+    areas.into_iter().next()
 }
 
 fn render_edge_scrollbar(
@@ -1412,7 +1401,7 @@ fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
         Line::from("Click Text: select the Text axis   PageUp/Down: scroll generated output"),
         Line::from("Ctrl+S: save SCSS + Penpot/Figma tokens JSON   Ctrl+C: copy SCSS"),
         Line::from(""),
-        Line::from("F1: this help   F2: theme source and tokens"),
+        Line::from("F1: this help   F2: theme list (Enter apply, e edit, s save)"),
         Line::from(""),
         Line::from("Mouse"),
         Line::from("Click a field: focus + place caret   Click tab / WCAG / APCA: switch or cycle"),
@@ -1447,6 +1436,10 @@ fn render_theme_debug_popup(frame: &mut Frame, app: &App, popup: Rect) {
     frame.render_widget(Clear, popup);
     if let Some(editor) = &app.theme_editor {
         render_theme_editor(frame, app, popup, editor);
+        return;
+    }
+    if let Some(picker) = &app.theme_picker {
+        render_theme_picker(frame, app, popup, picker);
         return;
     }
     let mut lines = vec![
@@ -1509,13 +1502,18 @@ fn render_theme_editor(
     popup: Rect,
     editor: &ldnddev_theme::ThemeEditor,
 ) {
-    use ldnddev_theme::{ThemeEditorRow, theme_editor_rows};
+    use ldnddev_theme::{theme_editor_rows, ThemeEditorRow};
     let rows = theme_editor_rows(&editor.fields);
     let channel = ["R", "G", "B"][editor.channel.min(2)];
     let target = editor.save_target.label().to_uppercase();
+    let esc = if app.theme_picker.is_some() {
+        "Esc back"
+    } else {
+        "Esc revert"
+    };
     let mut lines = vec![
         Line::from(format!(
-            "Save: {target} (Tab)   Channel: {channel} ([/])   Y save   R reset   Esc revert"
+            "Save: {target} (Tab)   Channel: {channel} ([/])   Y save   R reset   {esc}"
         )),
         Line::from(if editor.editing_hex {
             format!("Hex: {}█   Enter apply", editor.hex_draft)
@@ -1562,6 +1560,53 @@ fn render_theme_editor(
             .block(
                 Block::default()
                     .title("F2 Theme editor")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border_active_color())),
+            ),
+        popup,
+    );
+}
+
+fn render_theme_picker(
+    frame: &mut Frame,
+    app: &App,
+    popup: Rect,
+    picker: &ldnddev_theme::ThemePicker,
+) {
+    use ldnddev_theme::PickerRow;
+    let target = picker.save_target.label().to_uppercase();
+    let mut lines = vec![
+        Line::from(format!(
+            "Save: {target} (Tab)   Enter apply   e edit   s save   Esc revert"
+        )),
+        Line::from(""),
+    ];
+    let view_h = popup.height.saturating_sub(5) as usize;
+    for (idx, row) in picker
+        .rows
+        .iter()
+        .enumerate()
+        .skip(picker.scroll)
+        .take(view_h.max(1))
+    {
+        let (label, detail) = match row {
+            PickerRow::Follow { name } => ("Follow desktop".to_string(), name.clone()),
+            PickerRow::Theme(theme) => (theme.name.clone(), theme.mode.label().to_string()),
+            PickerRow::Custom => ("Custom".to_string(), "built-in".to_string()),
+        };
+        let cursor = if idx == picker.selected { ">" } else { " " };
+        lines.push(Line::from(format!("{cursor} {label:<22} {detail}")));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.modal_text_color())
+                    .bg(app.theme.modal_background_color()),
+            )
+            .block(
+                Block::default()
+                    .title("F2 Themes")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(app.theme.border_active_color())),
             ),

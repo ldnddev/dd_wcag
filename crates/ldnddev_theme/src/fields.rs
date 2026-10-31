@@ -139,7 +139,7 @@ pub fn is_canonical_key(key: &str) -> bool {
     COLOR_FIELDS.iter().any(|f| f.key == key)
 }
 
-pub const CANONICAL_DEFAULTS: &[(&'static str, Rgb)] = &[
+pub const CANONICAL_DEFAULTS: &[(&str, Rgb)] = &[
     ("base_background", Rgb::new(0x0f, 0x11, 0x14)),
     ("body_background", Rgb::new(0x2a, 0x2d, 0x31)),
     ("modal_background", Rgb::new(0x1c, 0x1e, 0x21)),

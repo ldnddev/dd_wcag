@@ -4,12 +4,12 @@
 //! It includes the App struct with all fields for color management,
 //! input handling, and UI state as per the architecture spec.
 
-use crate::color::{Color, is_large_text};
+use crate::color::{is_large_text, Color};
 use crate::fix::{FixAxis, FixState};
 use crate::layout::{Hit, LayoutMap};
 use crate::palette::{
-    GeneratedPalette, MatrixAxis, PaletteInput, PaletteState, generate_palette, matrix_cell,
-    parse_palette_color, validate_export,
+    generate_palette, matrix_cell, parse_palette_color, validate_export, GeneratedPalette,
+    MatrixAxis, PaletteInput, PaletteState,
 };
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
@@ -309,10 +309,15 @@ pub struct App {
     pub last_mouse_click_pos: Option<(u16, u16, Instant)>,
     pub error: Option<String>,
     pub status: Option<String>,
+    /// Color of `status`. Errors ignore this and use the error color.
+    pub status_level: crate::toast_chrome::ToastKind,
     pub notification_updated_at: Option<Instant>,
     pub show_keybindings: bool,
     pub show_theme_debug: bool,
     pub theme_editor: Option<ldnddev_theme::ThemeEditor>,
+    pub theme_picker: Option<ldnddev_theme::ThemePicker>,
+    pub omarchy_paths: ldnddev_theme::OmarchyPaths,
+    pub follow_stamp: Option<String>,
     pub active_tab: ActiveTab,
     pub theme: Theme,
     pub theme_source: ThemeSource,
@@ -323,12 +328,24 @@ pub struct App {
 impl App {
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::with_theme(Theme::default(), ThemeSource::Default)
+        let mut app = Self::with_theme(Theme::default(), ThemeSource::Default);
+        // No Omarchy themes here, so F2 opens the hex editor directly.
+        app.omarchy_paths = ldnddev_theme::OmarchyPaths::from_root(std::path::Path::new(
+            "/nonexistent/dd_wcag_omarchy",
+        ));
+        app
     }
 
     pub fn with_theme(theme: Theme, theme_source: ThemeSource) -> Self {
         let foreground = Color(Srgb::new(0.0, 0.0, 0.0));
         let background = Color(Srgb::new(1.0, 1.0, 1.0));
+        let omarchy_paths = ldnddev_theme::OmarchyPaths::system();
+        let follow_stamp = match &theme.omarchy {
+            Some(ldnddev_theme::OmarchyChoice::Follow) => {
+                ldnddev_theme::follow_stamp(&omarchy_paths)
+            }
+            _ => None,
+        };
 
         App {
             foreground, // Default black
@@ -368,16 +385,60 @@ impl App {
             last_mouse_click_pos: None,
             error: None,
             status: None,
+            status_level: crate::toast_chrome::ToastKind::Info,
             notification_updated_at: None,
             show_keybindings: false,
             show_theme_debug: false,
             theme_editor: None,
+            theme_picker: None,
+            omarchy_paths,
+            follow_stamp,
             active_tab: ActiveTab::Contrast,
             theme,
             theme_source,
             palette: PaletteState::default(),
             copied_palette: None,
         }
+    }
+
+    pub fn open_theme_ui(&mut self) {
+        self.show_keybindings = false;
+        self.show_theme_debug = true;
+        let palette = crate::theme::palette_from_theme(&self.theme);
+        let picker =
+            ldnddev_theme::ThemePicker::new(palette.clone(), &[], self.omarchy_paths.clone());
+        if picker.lists_omarchy() {
+            self.theme_picker = Some(picker);
+            self.theme_editor = None;
+        } else {
+            self.theme_picker = None;
+            self.theme_editor = Some(ldnddev_theme::ThemeEditor::new(palette, &[]));
+        }
+    }
+
+    /// Re-read `omarchy: follow` when the desktop theme file changes.
+    pub fn refresh_followed_theme(&mut self) -> bool {
+        if self.show_theme_debug || self.theme_picker.is_some() || self.theme_editor.is_some() {
+            return false;
+        }
+        if !matches!(
+            self.theme.omarchy,
+            Some(ldnddev_theme::OmarchyChoice::Follow)
+        ) {
+            return false;
+        }
+        let stamp = ldnddev_theme::follow_stamp(&self.omarchy_paths);
+        if stamp == self.follow_stamp {
+            return false;
+        }
+        let loaded = Theme::load_resolved(&self.omarchy_paths);
+        self.follow_stamp = stamp;
+        self.theme = loaded.theme;
+        self.theme_source = loaded.source;
+        if let Some(msg) = loaded.warning {
+            self.notify_error(msg);
+        }
+        true
     }
 
     pub fn adjust_font_size(&mut self, delta: i16) {
@@ -578,7 +639,7 @@ impl App {
                 }
                 self.update_contrast();
                 self.refresh_fix_search();
-                self.notify_status(format!(
+                self.notify_success(format!(
                     "Applied {} on {}",
                     self.foreground.to_hex(),
                     self.background.to_hex()
@@ -599,7 +660,7 @@ impl App {
                 {
                     self.fix.search(cell.fg, cell.bg, wcag, apca);
                 }
-                self.notify_status(format!(
+                self.notify_success(format!(
                     "Applied {} on {} to palette bases",
                     self.fix.original_fg.to_hex(),
                     self.fix.original_bg.to_hex()
@@ -655,7 +716,7 @@ impl App {
         let hex = color.to_hex();
         self.palette.set_role_hex(role, hex.clone());
         self.fix_send_chip = role.index();
-        self.notify_status(format!("FIXED {} {hex} → {}", axis.label(), role.label()));
+        self.notify_success(format!("FIXED {} {hex} → {}", axis.label(), role.label()));
     }
 
     pub fn send_fixed_selected_chip(&mut self) {
@@ -969,9 +1030,14 @@ impl App {
                 let (wcag, apca) = self.contrast_thresholds();
                 self.palette.select_worst_failing_pair(wcag, apca);
                 self.error = None;
-                self.notify_status(format!(
+                let message = format!(
                     "Palette generated: {blocking_count} blocking failure(s), {advisory_count} advisory warning(s)."
-                ));
+                );
+                if blocking_count > 0 {
+                    self.notify_warning(message);
+                } else {
+                    self.notify_success(message);
+                }
                 blocking_count == 0
             }
             Err(err) => {
@@ -986,7 +1052,20 @@ impl App {
     }
 
     pub fn notify_status(&mut self, message: impl Into<String>) {
+        self.notify(crate::toast_chrome::ToastKind::Info, message);
+    }
+
+    pub fn notify_success(&mut self, message: impl Into<String>) {
+        self.notify(crate::toast_chrome::ToastKind::Success, message);
+    }
+
+    pub fn notify_warning(&mut self, message: impl Into<String>) {
+        self.notify(crate::toast_chrome::ToastKind::Warning, message);
+    }
+
+    fn notify(&mut self, level: crate::toast_chrome::ToastKind, message: impl Into<String>) {
         self.status = Some(message.into());
+        self.status_level = level;
         self.error = None;
         self.notification_updated_at = Some(Instant::now());
     }
@@ -994,12 +1073,14 @@ impl App {
     pub fn notify_error(&mut self, message: impl Into<String>) {
         self.error = Some(message.into());
         self.status = None;
+        self.status_level = crate::toast_chrome::ToastKind::Info;
         self.notification_updated_at = Some(Instant::now());
     }
 
     pub fn clear_notification(&mut self) {
         self.error = None;
         self.status = None;
+        self.status_level = crate::toast_chrome::ToastKind::Info;
         self.notification_updated_at = None;
     }
 
@@ -1173,6 +1254,18 @@ mod tests {
 
         assert!(!app.generate_palette());
         assert!(app.error.as_deref().unwrap_or("").contains("Primary"));
+    }
+
+    #[test]
+    fn success_notice_uses_the_success_color() {
+        let mut app = App::new();
+        app.notify_success("Saved local theme to /tmp/theme.yml");
+        assert_eq!(
+            app.status.as_deref(),
+            Some("Saved local theme to /tmp/theme.yml")
+        );
+        assert_eq!(app.status_level, crate::toast_chrome::ToastKind::Success);
+        assert!(app.error.is_none());
     }
 
     #[test]

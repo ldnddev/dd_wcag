@@ -22,6 +22,7 @@ mod fix;
 mod layout;
 mod palette;
 mod theme;
+mod toast_chrome;
 mod ui;
 mod web_preview;
 
@@ -92,7 +93,7 @@ fn dispatch_effects(
     if effects.open_preview {
         sync_web_preview(app);
         match web_preview::open_in_browser() {
-            Ok(()) => app.notify_status("Opened web preview. Click toast to dismiss."),
+            Ok(()) => app.notify_success("Opened web preview. Click toast to dismiss."),
             Err(err) => app.notify_error(format!(
                 "Failed to open browser preview ({}): {err}",
                 web_preview::preview_path().display()
@@ -108,7 +109,7 @@ fn dispatch_effects(
     if effects.copy_hex {
         if let Some(hex) = app.copy_focused_hex() {
             match copy_to_clipboard(&hex) {
-                Ok(()) => app.notify_status(format!("Copied {hex}")),
+                Ok(()) => app.notify_success(format!("Copied {hex}")),
                 Err(err) => app.notify_error(format!("Clipboard unavailable: {err}")),
             }
         }
@@ -136,8 +137,11 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
-    if app.theme_editor.is_some() && !ctrl && key.code != KeyCode::F(1) {
-        handle_theme_editor(app, key);
+    if (app.theme_editor.is_some() || app.theme_picker.is_some())
+        && !ctrl
+        && key.code != KeyCode::F(1)
+    {
+        handle_theme_keys(app, key);
         return effects;
     }
 
@@ -204,21 +208,17 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
         }
         KeyCode::F(2) => {
             app.show_keybindings = false;
-            if app.theme_editor.is_some() {
-                close_theme_editor(app, true);
+            if app.theme_editor.is_some() || app.theme_picker.is_some() {
+                close_theme(app, true);
             } else {
-                app.show_theme_debug = true;
-                app.theme_editor = Some(ldnddev_theme::ThemeEditor::new(
-                    theme::palette_from_theme(&app.theme),
-                    &[],
-                ));
+                app.open_theme_ui();
             }
         }
         KeyCode::Esc => {
             if app.show_keybindings {
                 app.show_keybindings = false;
-            } else if app.theme_editor.is_some() {
-                close_theme_editor(app, true);
+            } else if app.theme_editor.is_some() || app.theme_picker.is_some() {
+                close_theme(app, true);
             } else if app.fix_open {
                 app.close_fix();
             } else if app.mode == Mode::Palette && app.palette.editing {
@@ -1007,6 +1007,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
                 needs_draw = true;
             }
             Some(Event::Resize(_, _)) => needs_draw = true,
+            Some(Event::FocusGained) => {
+                if app.refresh_followed_theme() {
+                    needs_draw = true;
+                }
+            }
             Some(_) => {}
             None => {
                 needs_draw = app.expire_notification(Instant::now());
@@ -1081,7 +1086,7 @@ fn save_palette_with_dialog(
             Ok(()) => {
                 let json_path = tokens_json_path_for(&path);
                 match std::fs::write(&json_path, tokens_json) {
-                    Ok(()) => app.notify_status(format!(
+                    Ok(()) => app.notify_success(format!(
                         "Palette saved to {} and {}.",
                         path.display(),
                         json_path.display()
@@ -1111,7 +1116,7 @@ fn copy_palette(app: &mut App) {
     match copy_to_clipboard(&scss) {
         Ok(()) => {
             app.copied_palette = Some(scss);
-            app.notify_status("Palette copied to clipboard.");
+            app.notify_success("Palette copied to clipboard.");
         }
         Err(err) => {
             app.copied_palette = Some(scss);
@@ -1148,7 +1153,11 @@ fn drag_scrollbar_to(app: &mut App, row: u16) {
 }
 
 fn apply_paste(app: &mut App, raw: &str, effects: &mut KeyEffects) {
-    if app.show_keybindings || app.show_theme_debug || app.theme_editor.is_some() {
+    if app.show_keybindings
+        || app.show_theme_debug
+        || app.theme_editor.is_some()
+        || app.theme_picker.is_some()
+    {
         return;
     }
     let text = raw.trim();
@@ -1300,15 +1309,61 @@ fn write_to_command_stdin(program: &str, args: &[&str], content: &str) -> std::i
     }
 }
 
-fn handle_theme_editor(app: &mut App, key: KeyEvent) {
+fn handle_theme_keys(app: &mut App, key: KeyEvent) {
     if key.code == KeyCode::F(2) {
-        close_theme_editor(app, true);
+        close_theme(app, true);
         return;
     }
     let Some(ek) = map_editor_key(key) else {
         return;
     };
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    if app.theme_editor.is_some() {
+        dispatch_theme_editor(app, ek, shift);
+    } else {
+        dispatch_theme_picker(app, ek);
+    }
+}
+
+fn dispatch_theme_picker(app: &mut App, ek: ldnddev_theme::EditorKey) {
+    let outcome = {
+        let Some(picker) = app.theme_picker.as_mut() else {
+            return;
+        };
+        picker.handle(ek)
+    };
+    match outcome {
+        ldnddev_theme::PickerOutcome::Applied => {
+            if let Some(picker) = &app.theme_picker {
+                theme::apply_palette(&mut app.theme, &picker.palette);
+            }
+        }
+        ldnddev_theme::PickerOutcome::EditColors => {
+            let Some(picker) = app.theme_picker.as_ref() else {
+                return;
+            };
+            let mut editor = ldnddev_theme::ThemeEditor::new(picker.palette.clone(), &[]);
+            editor.save_target = picker.save_target;
+            app.theme_editor = Some(editor);
+        }
+        ldnddev_theme::PickerOutcome::RequestSave => {
+            let saved = app
+                .theme_picker
+                .as_ref()
+                .map(|picker| (picker.palette.clone(), picker.save_target));
+            if let Some((palette, target)) = saved {
+                if let Err(err) = save_theme_palette(app, &palette, target) {
+                    app.notify_error(format!("Save failed: {err}"));
+                }
+            }
+        }
+        ldnddev_theme::PickerOutcome::Error(msg) => app.notify_error(msg),
+        ldnddev_theme::PickerOutcome::Closed { .. } => close_theme(app, true),
+        ldnddev_theme::PickerOutcome::None => {}
+    }
+}
+
+fn dispatch_theme_editor(app: &mut App, ek: ldnddev_theme::EditorKey, shift: bool) {
     let outcome = {
         let Some(editor) = app.theme_editor.as_mut() else {
             return;
@@ -1318,15 +1373,37 @@ fn handle_theme_editor(app: &mut App, key: KeyEvent) {
     match outcome {
         ldnddev_theme::EditorOutcome::PaletteChanged => {
             if let Some(editor) = &app.theme_editor {
+                if let Some(picker) = app.theme_picker.as_mut() {
+                    picker.palette = editor.palette.clone();
+                    picker.save_target = editor.save_target;
+                }
                 theme::apply_palette(&mut app.theme, &editor.palette);
             }
         }
         ldnddev_theme::EditorOutcome::RequestSave => {
-            if let Err(err) = save_theme_editor(app) {
-                app.notify_error(format!("Save failed: {err}"));
+            let saved = app
+                .theme_editor
+                .as_ref()
+                .map(|editor| (editor.palette.clone(), editor.save_target));
+            if let Some((palette, target)) = saved {
+                if let Err(err) = save_theme_palette(app, &palette, target) {
+                    app.notify_error(format!("Save failed: {err}"));
+                }
             }
         }
-        ldnddev_theme::EditorOutcome::Closed { .. } => close_theme_editor(app, false),
+        ldnddev_theme::EditorOutcome::Closed { .. } => {
+            if app.theme_picker.is_some() {
+                if let Some(editor) = app.theme_editor.take() {
+                    if let Some(picker) = app.theme_picker.as_mut() {
+                        picker.palette = editor.palette.clone();
+                        picker.save_target = editor.save_target;
+                    }
+                    theme::apply_palette(&mut app.theme, &editor.palette);
+                }
+            } else {
+                close_theme(app, true);
+            }
+        }
         ldnddev_theme::EditorOutcome::HexError(err) => {
             app.notify_error(format!("Invalid hex: {err}"));
         }
@@ -1334,40 +1411,53 @@ fn handle_theme_editor(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn close_theme_editor(app: &mut App, revert: bool) {
-    if let Some(mut editor) = app.theme_editor.take() {
-        if revert {
+fn close_theme(app: &mut App, revert: bool) {
+    if revert {
+        if let Some(picker) = app.theme_picker.as_ref() {
+            let palette = picker.revert_palette();
+            theme::apply_palette(&mut app.theme, &palette);
+        } else if let Some(mut editor) = app.theme_editor.take() {
             editor.revert();
+            theme::apply_palette(&mut app.theme, &editor.palette);
         }
-        theme::apply_palette(&mut app.theme, &editor.palette);
     }
+    app.theme_picker = None;
+    app.theme_editor = None;
     app.show_theme_debug = false;
 }
 
-fn save_theme_editor(app: &mut App) -> anyhow::Result<()> {
-    let Some(editor) = &app.theme_editor else {
-        return Ok(());
-    };
+fn save_theme_palette(
+    app: &mut App,
+    palette: &ldnddev_theme::Palette,
+    target: ldnddev_theme::ThemeSaveTarget,
+) -> anyhow::Result<()> {
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let fields = app
+        .theme_editor
+        .as_ref()
+        .map(|editor| editor.fields.clone())
+        .unwrap_or_else(|| ldnddev_theme::COLOR_FIELDS.to_vec());
     let path = ldnddev_theme::save_theme(
-        &editor.palette,
+        palette,
         &root,
         theme::PROJECT_THEME_FILE,
-        editor.save_target,
+        target,
         ldnddev_theme::default_config_home().as_deref(),
-        &editor.fields,
+        &fields,
     )?;
-    theme::apply_palette(&mut app.theme, &editor.palette);
-    app.theme_source = match editor.save_target {
+    theme::apply_palette(&mut app.theme, palette);
+    app.theme_source = match target {
         ldnddev_theme::ThemeSaveTarget::Local => theme::ThemeSource::Local,
         ldnddev_theme::ThemeSaveTarget::Global => theme::ThemeSource::Global,
     };
-    app.notify_status(format!(
+    app.follow_stamp = ldnddev_theme::follow_stamp(&app.omarchy_paths);
+    app.notify_success(format!(
         "Saved {} theme to {}",
-        editor.save_target.label(),
+        target.label(),
         path.display()
     ));
     app.theme_editor = None;
+    app.theme_picker = None;
     app.show_theme_debug = false;
     Ok(())
 }
@@ -1479,6 +1569,55 @@ mod tests {
         let mut app = App::new();
         handle_key_event(&mut app, key(KeyCode::F(2), KeyModifiers::NONE));
         assert!(app.show_theme_debug);
+        assert!(app.theme_editor.is_some());
+        assert!(app.theme_picker.is_none());
+    }
+
+    #[test]
+    fn f2_lists_omarchy_themes_and_esc_reverts() {
+        let dir = std::env::temp_dir().join(format!(
+            "dd_wcag_f2_omarchy_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/ldnddev_theme/tests/fixtures/omarchy/tokyo-night/colors.toml");
+        std::fs::create_dir_all(dir.join("stock/tokyo-night")).expect("mkdir");
+        std::fs::copy(&src, dir.join("stock/tokyo-night/colors.toml")).expect("copy");
+        std::fs::create_dir_all(dir.join("state/theme")).expect("state");
+        std::fs::write(dir.join("state/theme.name"), "tokyo-night\n").expect("name");
+        std::fs::copy(&src, dir.join("state/theme/colors.toml")).expect("current");
+
+        let mut app = App::new();
+        app.omarchy_paths = ldnddev_theme::OmarchyPaths::from_root(&dir);
+        let before = app.theme.body_background.clone();
+        handle_key_event(&mut app, key(KeyCode::F(2), KeyModifiers::NONE));
+        assert!(app.show_theme_debug);
+        assert!(app.theme_editor.is_none());
+        let picker = app.theme_picker.as_ref().expect("picker");
+        assert!(matches!(
+            picker.rows.first(),
+            Some(ldnddev_theme::PickerRow::Follow { .. })
+        ));
+        handle_key_event(&mut app, key(KeyCode::Char('g'), KeyModifiers::NONE));
+        handle_key_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.theme.body_background, "#1A1B26");
+        handle_key_event(&mut app, key(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(app.theme_editor.is_some());
+        handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.show_theme_debug);
+        assert!(app.theme_editor.is_none());
+        assert!(app.theme_picker.is_some());
+        assert_eq!(app.theme.body_background, "#1A1B26");
+        handle_key_event(&mut app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.show_theme_debug);
+        assert!(app.theme_picker.is_none());
+        assert_eq!(app.theme.body_background, before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

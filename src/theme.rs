@@ -1,4 +1,5 @@
 use ratatui::style::Color;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -88,6 +89,10 @@ pub struct Theme {
     pub folders: String,
     pub files: String,
     pub links: String,
+    /// Linked Omarchy theme. Save writes this instead of a full hex dump.
+    pub omarchy: Option<ldnddev_theme::OmarchyChoice>,
+    /// Color keys edited on top of that link.
+    pub overrides: BTreeSet<String>,
 }
 
 impl Default for Theme {
@@ -120,12 +125,18 @@ impl Default for Theme {
             folders: "#64B4F5".to_string(),
             files: "#FFAF46".to_string(),
             links: "#FFA087".to_string(),
+            omarchy: None,
+            overrides: BTreeSet::new(),
         }
     }
 }
 
 impl Theme {
     pub fn load() -> LoadedTheme {
+        Self::load_resolved(&ldnddev_theme::OmarchyPaths::system())
+    }
+
+    pub fn load_resolved(omarchy_paths: &ldnddev_theme::OmarchyPaths) -> LoadedTheme {
         let local_path = PathBuf::from(PROJECT_THEME_FILE);
         let global_path = global_theme_path();
 
@@ -138,12 +149,7 @@ impl Theme {
             }
 
             return match Self::load_from_file(&path) {
-                Ok(theme) => LoadedTheme {
-                    theme,
-                    source,
-                    path: Some(path),
-                    warning: None,
-                },
+                Ok(theme) => finish_omarchy(theme, source, Some(path), omarchy_paths),
                 Err(err) => LoadedTheme {
                     theme: Self::default(),
                     source: ThemeSource::Default,
@@ -207,6 +213,7 @@ impl Theme {
         let mut in_colors = false;
         let mut saw_colors = false;
         let mut saw_version = false;
+        let mut explicit_colors = BTreeSet::new();
 
         for (line_idx, raw_line) in content.lines().enumerate() {
             let without_comment = strip_yaml_comment(raw_line);
@@ -228,21 +235,28 @@ impl Theme {
                 let Some((key, value)) = trimmed.split_once(':') else {
                     continue;
                 };
-                if key.trim() != "version" {
-                    continue;
+                match key.trim() {
+                    "version" => {
+                        saw_version = true;
+                        let value = parse_yaml_scalar(value);
+                        let version = value.parse::<u16>().map_err(|_| {
+                            format!("line {}: version must be an integer", line_idx + 1)
+                        })?;
+                        if version != SUPPORTED_THEME_VERSION {
+                            return Err(format!(
+                                "unsupported theme version {version}; expected {SUPPORTED_THEME_VERSION}"
+                            ));
+                        }
+                        theme.version = version;
+                    }
+                    "omarchy" => {
+                        let value = parse_yaml_scalar(value);
+                        let choice = ldnddev_theme::OmarchyChoice::parse(value)
+                            .map_err(|err| format!("line {}: {err}", line_idx + 1))?;
+                        theme.omarchy = Some(choice);
+                    }
+                    _ => {}
                 }
-
-                saw_version = true;
-                let value = parse_yaml_scalar(value);
-                let version = value
-                    .parse::<u16>()
-                    .map_err(|_| format!("line {}: version must be an integer", line_idx + 1))?;
-                if version != SUPPORTED_THEME_VERSION {
-                    return Err(format!(
-                        "unsupported theme version {version}; expected {SUPPORTED_THEME_VERSION}"
-                    ));
-                }
-                theme.version = version;
                 continue;
             }
 
@@ -270,15 +284,19 @@ impl Theme {
             }
 
             theme.set_token(key, value);
+            explicit_colors.insert(key.to_string());
         }
 
-        if !saw_colors {
+        if theme.omarchy.is_none() && !saw_colors {
             return Err("missing required top-level colors: mapping".to_string());
         }
         if !saw_version {
             return Err(format!(
                 "missing required top-level version: {SUPPORTED_THEME_VERSION}"
             ));
+        }
+        if theme.omarchy.is_some() {
+            theme.overrides = explicit_colors;
         }
 
         Ok(theme)
@@ -413,6 +431,8 @@ impl Theme {
 pub fn palette_from_theme(theme: &Theme) -> ldnddev_theme::Palette {
     let mut palette = ldnddev_theme::Palette::builtin();
     palette.version = u64::from(theme.version);
+    palette.omarchy = theme.omarchy.clone();
+    palette.overrides = theme.overrides.clone();
     for (key, value) in theme.tokens() {
         if let Ok(rgb) = ldnddev_theme::parse_hex_input(value) {
             palette.set(key, rgb);
@@ -422,10 +442,48 @@ pub fn palette_from_theme(theme: &Theme) -> ldnddev_theme::Palette {
 }
 
 pub fn apply_palette(theme: &mut Theme, palette: &ldnddev_theme::Palette) {
+    theme.omarchy = palette.omarchy.clone();
+    theme.overrides = palette.overrides.clone();
     for field in ldnddev_theme::COLOR_FIELDS {
         if let Some(rgb) = palette.get(field.key) {
             theme.set_token(field.key, &rgb.to_hex());
         }
+    }
+}
+
+fn finish_omarchy(
+    mut theme: Theme,
+    source: ThemeSource,
+    path: Option<PathBuf>,
+    omarchy_paths: &ldnddev_theme::OmarchyPaths,
+) -> LoadedTheme {
+    if theme.omarchy.is_none() {
+        return LoadedTheme {
+            theme,
+            source,
+            path,
+            warning: None,
+        };
+    }
+    let palette = palette_from_theme(&theme);
+    match ldnddev_theme::apply_omarchy(&palette, omarchy_paths) {
+        Ok(resolved) => {
+            apply_palette(&mut theme, &resolved);
+            LoadedTheme {
+                theme,
+                source,
+                path,
+                warning: None,
+            }
+        }
+        Err(err) => LoadedTheme {
+            theme: Theme::default(),
+            source: ThemeSource::Default,
+            path: None,
+            warning: Some(format!(
+                "omarchy theme failed ({err}); using built-in defaults"
+            )),
+        },
     }
 }
 
@@ -550,5 +608,110 @@ colors:
         assert_eq!(ThemeSource::Local.label(), "local");
         assert_eq!(ThemeSource::Global.label(), "global");
         assert_eq!(ThemeSource::Default.label(), "default");
+    }
+
+    #[test]
+    fn omarchy_link_is_optional_and_colors_may_be_omitted() {
+        let err = Theme::from_yaml_str("version: 1\n").expect_err("colors required");
+        assert!(err.contains("missing required top-level colors"));
+
+        let follow = Theme::from_yaml_str("version: 1\nomarchy: follow\n").expect("follow");
+        assert_eq!(follow.omarchy, Some(ldnddev_theme::OmarchyChoice::Follow));
+        assert!(follow.overrides.is_empty());
+        assert_eq!(follow.body_background, Theme::default().body_background);
+
+        let theme = Theme::from_yaml_str(
+            "version: 1\nomarchy: tokyo-night\ncolors:\n  text_labels: \"#ABCDEF\"\n",
+        )
+        .expect("override");
+        assert_eq!(
+            theme.omarchy,
+            Some(ldnddev_theme::OmarchyChoice::Theme("tokyo-night".into()))
+        );
+        assert!(theme.overrides.contains("text_labels"));
+        assert!(!theme.overrides.contains("body_background"));
+        assert_eq!(theme.text_labels, "#ABCDEF");
+    }
+
+    #[test]
+    fn palette_roundtrip_keeps_omarchy_link() {
+        let mut theme = Theme::default();
+        theme.omarchy = Some(ldnddev_theme::OmarchyChoice::Follow);
+        theme.overrides.insert("text_labels".to_string());
+        let palette = palette_from_theme(&theme);
+        assert_eq!(palette.omarchy, theme.omarchy);
+        assert!(palette.overrides.contains("text_labels"));
+
+        let mut restored = Theme::default();
+        apply_palette(&mut restored, &palette);
+        assert_eq!(restored.omarchy, theme.omarchy);
+        assert!(restored.overrides.contains("text_labels"));
+    }
+
+    #[test]
+    fn omarchy_link_maps_colors_and_keeps_override() {
+        let root = std::env::temp_dir().join(format!(
+            "dd_wcag_omarchy_map_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/ldnddev_theme/tests/fixtures/omarchy/tokyo-night/colors.toml");
+        std::fs::create_dir_all(root.join("stock/tokyo-night")).expect("mkdir");
+        std::fs::copy(&src, root.join("stock/tokyo-night/colors.toml")).expect("copy");
+        let theme = Theme::from_yaml_str(
+            "version: 1\nomarchy: tokyo-night\ncolors:\n  text_labels: \"#ABCDEF\"\n",
+        )
+        .expect("yaml");
+        let loaded = finish_omarchy(
+            theme,
+            ThemeSource::Local,
+            None,
+            &ldnddev_theme::OmarchyPaths::from_root(&root),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(loaded.warning.is_none(), "{:?}", loaded.warning);
+        assert_eq!(loaded.theme.body_background, "#1A1B26");
+        assert_eq!(loaded.theme.text_labels, "#ABCDEF");
+        assert_eq!(
+            loaded.theme.omarchy,
+            Some(ldnddev_theme::OmarchyChoice::Theme("tokyo-night".into()))
+        );
+        assert!(loaded.theme.overrides.contains("text_labels"));
+        assert_eq!(loaded.source, ThemeSource::Local);
+    }
+
+    #[test]
+    fn missing_omarchy_theme_uses_builtin_with_warning() {
+        let root = std::env::temp_dir().join(format!(
+            "dd_wcag_omarchy_missing_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let theme = Theme::from_yaml_str("version: 1\nomarchy: missing-theme\n").expect("yaml");
+        let loaded = finish_omarchy(
+            theme,
+            ThemeSource::Local,
+            None,
+            &ldnddev_theme::OmarchyPaths::from_root(&root),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let warning = loaded.warning.unwrap_or_default();
+        assert!(warning.contains("omarchy theme failed"), "{warning}");
+        assert_eq!(loaded.source, ThemeSource::Default);
+        assert_eq!(
+            loaded.theme.body_background,
+            Theme::default().body_background
+        );
+        assert!(loaded.theme.omarchy.is_none());
     }
 }

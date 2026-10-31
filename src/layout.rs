@@ -108,21 +108,6 @@ pub fn centered(area: Rect, w_pct: u16, h_pct: u16) -> Rect {
     }
 }
 
-pub fn bottom_right_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width.saturating_sub(2)).max(16);
-    let height = height.min(area.height.saturating_sub(3)).max(2);
-    Rect {
-        x: area
-            .x
-            .saturating_add(area.width.saturating_sub(width.saturating_add(1))),
-        y: area
-            .y
-            .saturating_add(area.height.saturating_sub(height.saturating_add(2))),
-        width,
-        height,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     TabContrast,

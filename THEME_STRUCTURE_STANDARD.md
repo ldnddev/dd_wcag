@@ -65,6 +65,45 @@ colors:
   links: "#FFA087"
 ```
 
+`version` stays `1`. An optional top-level `omarchy` key links the file to a desktop theme instead of listing every color:
+
+```yaml
+version: 1
+omarchy: tokyo-night   # or: follow
+```
+
+`omarchy: tokyo-night` reads that theme's `colors.toml`. `omarchy: follow` reads the current desktop theme (`theme.name` plus its `colors.toml`) and picks up a later desktop change while the app is open. When `omarchy` is set, `colors` lists only overrides and may be omitted:
+
+```yaml
+version: 1
+omarchy: follow
+colors:
+  text_labels: "#ABCDEF"
+```
+
+Apps read those files directly. They do not shell out to `omarchy` and do not call `omarchy theme set` (that would retint the desktop). A missing `colors.toml` keeps the builtin palette.
+
+### Omarchy token mapping
+
+| theme token | Omarchy source |
+|---|---|
+| `base_background` | `darker_background` |
+| `body_background` | `background` |
+| `modal_background` | `dark_background` |
+| `selected_background`, `selection` | `selection` |
+| `text_primary` | `foreground`, repaired to 4.5:1 against the shell and the body |
+| `text_secondary` | `dark_foreground`, repaired to 3:1 |
+| `text_disabled` | `muted` |
+| `text_inverse` | `background` |
+| `text_labels`, `scrollbar` | `orange` |
+| `text_active_focus`, `modal_labels`, `modal_header`, `scrollbar_hover`, `input_border_focus` | `accent` |
+| `modal_text`, `input_text_default` | `foreground` |
+| `border_default`, `input_border_default` | `muted` |
+| `border_active` | `active_border_color`, else `accent` |
+| `input_text_focus`, `cursor` | `bright_foreground` |
+| `success`, `warning`, `error`, `info` | `green`, `yellow`, `red`, `cyan` |
+| `folders`, `files`, `links` | `blue`, `yellow`, `cyan` |
+
 ---
 
 ## Required Mapping Rules
