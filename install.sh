@@ -51,12 +51,12 @@ Options:
   --config-dir DIR    Theme install directory (default: ~/.config/ldnddev)
   --print-target      Print the detected package target and exit
   --dry-run           Print what would be installed, without installing
-  -uninstall          Remove the installed binary and theme
+  -uninstall          Remove the installed binary, theme, and launcher
   -h, --help          Show this help
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.9.1
+  curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.9.2
   ./install.sh
   ./install.sh --from-source
   ./install.sh -uninstall
@@ -67,11 +67,14 @@ Install behavior:
   - Falls back to a cargo source build if no package is published for this machine
   - Installs the binary to ~/.local/bin/${APP_NAME} by default
   - Installs the theme to ~/.config/ldnddev/${THEME_FILE} only if that file is missing
+  - On Linux, writes a terminal launcher to ~/.local/share/applications/${APP_NAME}.desktop
 
 Uninstall behavior:
   - Removes the installed ${APP_NAME} binary
   - Removes ~/.config/ldnddev/${THEME_FILE}
   - Removes ~/.config/ldnddev only if it is empty
+  - On Linux, removes the ${APP_NAME}.desktop launcher
+  Pass the same --prefix, --config-dir, and XDG_DATA_HOME used at install time.
 USAGE
 }
 
@@ -230,10 +233,108 @@ install_theme_from() {
   fi
 }
 
+on_linux() {
+  [[ "$(uname -s)" == "Linux" ]]
+}
+
+# Desktop menus search XDG_DATA_HOME, then ~/.local/share. A prefix under
+# $HOME still publishes the launcher where the session looks. A system
+# prefix such as /usr/local/bin uses the sibling share/applications dir.
+apps_dir() {
+  if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+    case "${PREFIX}" in
+      "${HOME}" | "${HOME}"/*)
+        printf '%s/applications\n' "${XDG_DATA_HOME}"
+        return
+        ;;
+    esac
+  fi
+  case "${PREFIX}" in
+    "${HOME}" | "${HOME}"/*)
+      printf '%s/.local/share/applications\n' "${HOME}"
+      ;;
+    *)
+      printf '%s/share/applications\n' "$(dirname "${PREFIX}")"
+      ;;
+  esac
+}
+
+launcher_path() {
+  printf '%s/%s.desktop\n' "$(apps_dir)" "${APP_NAME}"
+}
+
+# Quote one Exec argument. A literal % is %%.
+desktop_quote() {
+  local s="$1"
+  [[ "${s}" != *$'\n'* ]] || die "desktop path contains a newline"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//\`/\\\`}"
+  s="${s//\$/\\\$}"
+  s="${s//%/%%}"
+  printf '"%s"' "${s}"
+}
+
+refresh_desktop_database() {
+  local dir="$1"
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "${dir}" >/dev/null 2>&1 || true
+  fi
+}
+
+write_desktop() {
+  local dest="$1"
+  local bin="$2"
+  local exec_q
+  exec_q="$(desktop_quote "${bin}")"
+  cat > "${dest}" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=${APP_NAME}
+GenericName=Contrast checker
+Comment=Check WCAG and APCA contrast in the terminal
+Exec=${exec_q}
+TryExec=${bin}
+Terminal=true
+Icon=utilities-terminal
+Categories=Utility;
+Keywords=wcag;apca;contrast;accessibility;color;
+StartupNotify=false
+EOF
+  chmod 0644 "${dest}"
+}
+
+install_launcher() {
+  local dir dest bin
+  if ! on_linux; then
+    echo "Desktop launcher is written on Linux. Skipped on $(uname -s)."
+    return 0
+  fi
+  bin="${PREFIX}/${APP_NAME}"
+  dir="$(apps_dir)"
+  dest="$(launcher_path)"
+  mkdir -p "${dir}"
+  write_desktop "${dest}" "${bin}"
+  refresh_desktop_database "${dir}"
+  echo "Launcher: ${dest}"
+}
+
+print_launcher_plan() {
+  if on_linux; then
+    echo "launcher: $(launcher_path)"
+  else
+    echo "launcher: skipped ($(uname -s))"
+  fi
+}
+
 print_done() {
   echo ""
   echo "Installed: ${PREFIX}/${APP_NAME}"
   echo "Theme path: ${CONFIG_DIR}/${THEME_FILE}"
+  if on_linux; then
+    echo "App menu launcher: $(launcher_path)"
+  fi
   echo ""
   case ":${PATH}:" in
     *":${PREFIX}:"*) ;;
@@ -261,6 +362,7 @@ install_from_prebuilt() {
     echo "target: ${target}"
     echo "package: ${url}"
     echo "checksum: ${sha_url}"
+    print_launcher_plan
     return 0
   fi
 
@@ -295,6 +397,7 @@ install_from_prebuilt() {
 
   install_binary "${extracted}"
   install_theme_from "$(dirname "${extracted}")"
+  install_launcher
   print_done
   cleanup
   return 0
@@ -310,6 +413,7 @@ install_from_source() {
     else
       echo "Would clone ${DEFAULT_GIT_URL} (branch ${BRANCH:-${DEFAULT_BRANCH}}) and build from source"
     fi
+    print_launcher_plan
     return 0
   fi
 
@@ -340,7 +444,52 @@ install_from_source() {
 
   install_binary "${src_dir}/target/release/${APP_NAME}"
   install_theme_from "${src_dir}"
+  install_launcher
   print_done
+}
+
+uninstall_installed() {
+  local bin_path theme_path launcher apps
+
+  bin_path="${PREFIX}/${APP_NAME}"
+  theme_path="${CONFIG_DIR}/${THEME_FILE}"
+
+  if [[ -e "${bin_path}" || -L "${bin_path}" ]]; then
+    rm -f -- "${bin_path}"
+    echo "Removed binary: ${bin_path}"
+  else
+    echo "Binary not found: ${bin_path}"
+  fi
+
+  if [[ -e "${theme_path}" || -L "${theme_path}" ]]; then
+    rm -f -- "${theme_path}"
+    echo "Removed theme: ${theme_path}"
+  else
+    echo "Theme not found: ${theme_path}"
+  fi
+
+  if [[ -d "${CONFIG_DIR}" ]]; then
+    if rmdir "${CONFIG_DIR}" 2>/dev/null; then
+      echo "Removed empty config directory: ${CONFIG_DIR}"
+    else
+      echo "Config directory not empty, left in place: ${CONFIG_DIR}"
+    fi
+  fi
+
+  if on_linux; then
+    apps="$(apps_dir)"
+    launcher="$(launcher_path)"
+    if [[ -e "${launcher}" || -L "${launcher}" ]]; then
+      rm -f -- "${launcher}"
+      echo "Removed launcher: ${launcher}"
+      refresh_desktop_database "${apps}"
+    else
+      echo "Launcher not found: ${launcher}"
+    fi
+  fi
+
+  echo ""
+  echo "Uninstall complete."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -416,33 +565,7 @@ if [[ "${UNINSTALL}" -eq 1 ]]; then
     die "--repo, --branch, --version, --from-source, and --prebuilt are not valid with -uninstall."
   fi
 
-  BIN_PATH="${PREFIX}/${APP_NAME}"
-  THEME_PATH="${CONFIG_DIR}/${THEME_FILE}"
-
-  if [[ -f "${BIN_PATH}" ]]; then
-    rm -f "${BIN_PATH}"
-    echo "Removed binary: ${BIN_PATH}"
-  else
-    echo "Binary not found: ${BIN_PATH}"
-  fi
-
-  if [[ -f "${THEME_PATH}" ]]; then
-    rm -f "${THEME_PATH}"
-    echo "Removed theme: ${THEME_PATH}"
-  else
-    echo "Theme not found: ${THEME_PATH}"
-  fi
-
-  if [[ -d "${CONFIG_DIR}" ]]; then
-    if rmdir "${CONFIG_DIR}" 2>/dev/null; then
-      echo "Removed empty config directory: ${CONFIG_DIR}"
-    else
-      echo "Config directory not empty, left in place: ${CONFIG_DIR}"
-    fi
-  fi
-
-  echo ""
-  echo "Uninstall complete."
+  uninstall_installed
   exit 0
 fi
 

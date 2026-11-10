@@ -359,6 +359,9 @@
         <code>~/.local/bin/dd_wcag</code>. Alpine/musl and unpublished targets fall back to a cargo build.
         The default theme is copied to
         <code>~/.config/ldnddev/</code> only if that file is missing.
+        On Linux the installer also writes
+        <code>~/.local/share/applications/dd_wcag.desktop</code>
+        so the app menu opens the TUI in a terminal.
       </p>
       <p>Pin a release, or force a cargo build if no package exists for your machine:</p>
       <pre><code>curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.5.0
@@ -370,6 +373,7 @@ curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh |
       <ul>
         <li>Installs the binary to <code>~/.local/bin/dd_wcag</code>.</li>
         <li>Copies <code>dd_wcag_theme.yml</code> to <code>~/.config/ldnddev/</code> only if that file is missing (it will not overwrite your theme).</li>
+        <li>On Linux, writes <code>~/.local/share/applications/dd_wcag.desktop</code> (<code>Terminal=true</code>).</li>
       </ul>
       <p>Pass <code>--prebuilt</code> to download a Release package instead of compiling.</p>
 
@@ -603,7 +607,7 @@ cargo build --release
 # or, without a checkout:
 curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- -uninstall</code></pre>
       <p>
-        Removes <code>~/.local/bin/dd_wcag</code> and <code>~/.config/ldnddev/dd_wcag_theme.yml</code>, then removes <code>~/.config/ldnddev</code> only if the directory is empty. Pass <code>--prefix</code> / <code>--config-dir</code> if you installed somewhere else.
+        Removes <code>~/.local/bin/dd_wcag</code>, <code>~/.config/ldnddev/dd_wcag_theme.yml</code>, and, on Linux, <code>~/.local/share/applications/dd_wcag.desktop</code>. Then removes <code>~/.config/ldnddev</code> only if that directory is empty. Pass the same <code>--prefix</code>, <code>--config-dir</code>, and <code>XDG_DATA_HOME</code> you used at install time.
       </p>
     </section>
 
