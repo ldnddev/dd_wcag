@@ -11,11 +11,12 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::io::{self, Stdout, Write};
-use std::process::{Command, Stdio};
+use std::io::{self, IsTerminal, Stdout, Write};
+use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 mod app;
+mod cli;
 mod color;
 mod contrast;
 mod fix;
@@ -34,7 +35,38 @@ use palette::{PALETTE_EXPORT_PATH, tokens_json_path_for};
 use palette::{PaletteInput, pair_at_list_index};
 use theme::Theme;
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    let stdin_is_tty = io::stdin().is_terminal();
+    match cli::dispatch(&args, stdin_is_tty) {
+        cli::Dispatch::Tui(seed) => match run_tui(seed) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::from(1)
+            }
+        },
+        cli::Dispatch::Output(output) => emit(output),
+        cli::Dispatch::ReadStdin(spec) => {
+            let mut stdin = String::new();
+            let mut input = io::stdin();
+            match io::Read::read_to_string(&mut input, &mut stdin) {
+                Ok(_) => emit(cli::complete_check(&spec, &stdin)),
+                Err(err) => emit(cli::error(2, format!("failed to read stdin: {err}"))),
+            }
+        }
+    }
+}
+
+fn emit(output: cli::CliOutput) -> ExitCode {
+    print!("{}", output.stdout);
+    eprint!("{}", output.stderr);
+    let _ = io::Write::flush(&mut io::stdout());
+    let _ = io::Write::flush(&mut io::stderr());
+    ExitCode::from(output.code)
+}
+
+fn run_tui(seed: cli::LaunchSeed) -> Result<()> {
     let mut terminal = setup_terminal()?;
 
     let loaded_theme = Theme::load();
@@ -53,6 +85,7 @@ fn main() -> Result<()> {
     if let Some(warning) = loaded_theme.warning {
         app.notify_error(warning);
     }
+    cli::apply_launch_seed(&mut app, &seed);
     sync_web_preview(&mut app);
 
     let res = run_loop(&mut terminal, &mut app);

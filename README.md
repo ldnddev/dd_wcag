@@ -50,6 +50,26 @@ cargo run
 - Palette builder from Primary / Secondary / Tertiary (optional Support) → WCAG-gated `_palette.scss` and Penpot/Figma `_palette.tokens.json`
 - Directed pair matrix of the five conceptual colors (text \\ surface); Enter or double-click a failing cell to Fix that pair
 
+## Command line
+
+No arguments opens the Contrast tab. Color flags open the TUI already filled in. `check` and `palette` print and exit, so they can run in a script.
+
+```bash
+dd_wcag --fg '#1C1E21' --bg '#F5F6F7'
+dd_wcag --primary '#0B3D91' --secondary '#C45508' --tertiary '#1F7A4D' --generate
+
+dd_wcag check --fg '#1C1E21' --bg '#FFFFFF' --json
+dd_wcag check --pairs pairs.txt
+
+dd_wcag palette --primary '#0B3D91' --secondary '#C45508' --tertiary '#1F7A4D' --out ./theme
+```
+
+`check` prints the WCAG ratio, AA and AAA, and APCA Lc. Exit 0 when the pair passes the selected WCAG level (default AA) and APCA bar (default Lc75). Exit 1 when it fails. Exit 2 when the arguments or a color are invalid. `--size` and `--weight` use the same large-text rule as the TUI. A pairs file is one `fg bg` pair per line.
+
+`palette` writes `_palette.scss` and `_palette.tokens.json`. Primary, Secondary, and Tertiary are required. Support defaults to `#46BE8C`. Exit 1 when a blocking contrast check fails. The files are still written.
+
+`dd_wcag --help` lists every flag. The full contract is SPEC.md §25.
+
 ## Everyday keys
 
 | Key | Action |

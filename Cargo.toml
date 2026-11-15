@@ -1,6 +1,6 @@
 [package]
 name = "dd_wcag"
-version = "0.9.2"
+version = "0.9.3"
 edition = "2024"
 
 [workspace]
@@ -16,8 +16,11 @@ debug = false
 
 [dependencies]
 anyhow = "1.0.101"
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions", "wrap_help"] }
 crossterm = "0.29"
 palette = { version = "0.7.6", default-features = false, features = ["std"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 ldnddev_theme = { path = "crates/ldnddev_theme" }

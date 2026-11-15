@@ -2,18 +2,18 @@ use crate::app::{App, FocusId, Mode};
 use crate::contrast::render_contrast;
 use crate::fix::PairVerdict;
 use crate::layout::{
-    breakpoint, caret_line, centered, split_body_with_fix, split_header, split_shell, Hit,
-    LayoutMap,
+    Hit, LayoutMap, breakpoint, caret_line, centered, split_body_with_fix, split_header,
+    split_shell,
 };
 use crate::palette::{
-    matrix_cell, matrix_text_swatch, off_diagonal_pairs, pair_list_index, MatrixAxis,
+    MatrixAxis, matrix_cell, matrix_text_swatch, off_diagonal_pairs, pair_list_index,
 };
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
@@ -1502,7 +1502,7 @@ fn render_theme_editor(
     popup: Rect,
     editor: &ldnddev_theme::ThemeEditor,
 ) {
-    use ldnddev_theme::{theme_editor_rows, ThemeEditorRow};
+    use ldnddev_theme::{ThemeEditorRow, theme_editor_rows};
     let rows = theme_editor_rows(&editor.fields);
     let channel = ["R", "G", "B"][editor.channel.min(2)];
     let target = editor.save_target.label().to_uppercase();

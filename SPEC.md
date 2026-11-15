@@ -69,8 +69,10 @@ Terminal rendering cannot show real CSS px or a real font family. Label TUI prev
 ## 3. Stack, startup, event loop
 
 ```
-ratatui + crossterm + palette + anyhow
+ratatui + crossterm + palette + anyhow + clap
 ```
+
+Parse argv before `enable_raw_mode`. No arguments opens the TUI on Contrast. `check` and `palette` print and exit. See §25.
 
 Setup: `enable_raw_mode`, `EnterAlternateScreen`, `EnableMouseCapture`.
 
@@ -743,7 +745,8 @@ F2 shows: source (`local` / `global` / `default`), version, path, health message
 
 ```
 src/
-  main.rs           // setup, mouse capture, loop, dispatch_effects (clipboard, save, open)
+  main.rs           // argv dispatch, setup, mouse capture, loop, dispatch_effects
+  cli.rs            // TUI seeds, check, palette export. No terminal I/O.
   app.rs            // App, mode, focus, drag, handle_key_event, handle_mouse_event, KeyEffects
   layout.rs         // breakpoint, shell splits, LayoutMap, hit()
   contrast.rs       // ContrastState + render_contrast(area) -> partial map
@@ -772,6 +775,7 @@ Keep the I/O-free handler split. Clipboard backends unchanged (`pbcopy` / `clip`
 - Header APCA bar vs lookup advisory: glyphs follow the bar.
 - Fix Apply refuses to write into fixed text tokens.
 - KeyEffects: `Ctrl+Q`, `Ctrl+O`, `Ctrl+S`, `Ctrl+C` on Palette.
+- CLI (§25): help/version exit before raw mode; TUI seeds; `check` text and JSON, large text, APCA bar vs lookup, batch pairs; `palette` export matches `generate_palette` and exits 1 on blocking failures.
 
 No automated screenshot harness. Manual: Wide/Medium/Narrow resize; Contrast A↔E; Palette D↔stack; Fix strip vs overlay; mouse table in §13; web preview; theme local/global/default.
 
@@ -822,7 +826,81 @@ Done when:
 
 | File | Role |
 |---|---|
-| `SPEC.md` | This file. App product + layout + mouse + keyboard + palette export. |
+| `SPEC.md` | This file. App product + layout + mouse + keyboard + palette export + CLI. |
 | `THEME_STRUCTURE_STANDARD.md` | Shared ldnddev YAML chrome tokens. |
 | `README.md` | User-facing install, keys, manual tests. Update when `layout-mouse` ships. |
 | `dd_wcag_theme.yml` | Default/local theme instance. |
+
+---
+
+## 25. CLI
+
+Same binary as the TUI. Parse argv before `enable_raw_mode`. `--help` and `--version` print and exit 0. No arguments opens Contrast. A subcommand never opens the TUI, and TUI flags cannot be combined with a subcommand.
+
+Colors accept the same syntax as the fields: `#hex` / bare hex, `rgb()` / `rgba()`, `hsl()`.
+
+Shared metric flags, on the TUI launch and on `check`:
+
+| Flag | Default | Rule |
+|---|---|---|
+| `--size` | 16 | 6..=120 |
+| `--weight` | 400 | 100..=900, step 100 |
+| `--wcag` | `aa` | `aa` or `aaa`. Official WCAG pass/fail. |
+| `--apca` | 75 | 45, 60, 75, or 90. Official pass is `\|Lc\| >=` this bar. |
+
+Invalid metrics or colors exit 2 with the message on stderr and no report on stdout.
+
+### 25.1 Open the TUI
+
+```
+dd_wcag --fg #1C1E21 --bg #F5F6F7 --size 18 --weight 700
+dd_wcag --primary #0B3D91 --secondary #C45508 --tertiary #1F7A4D --generate
+```
+
+`--fg` or `--bg` opens Contrast with those fields filled. The other color stays the built-in black or white. `--primary`, `--secondary`, `--tertiary`, or `--support` opens Palette. Unspecified roles stay the built-in defaults. `--tab contrast|palette` forces the tab. `--generate` opens Palette and runs Generate, so the matrix is filled. Partial Palette seeds are allowed. Contrast colors and Palette colors together are an error. `--generate` with Contrast colors, or with `--tab contrast`, is an error.
+
+`--size`, `--weight`, `--wcag`, and `--apca` set the shared header before the first frame. Italic stays off. Weight 700 selects the Bold chip.
+
+### 25.2 `check`
+
+```
+dd_wcag check --fg #1C1E21 --bg #FFFFFF
+dd_wcag check --fg #1C1E21 --bg #FFFFFF --size 18 --weight 700 --wcag aaa --apca 60 --json
+dd_wcag check --pairs pairs.txt
+```
+
+`--fg` is the text color and `--bg` is the surface. Both are required together. The command calls `contrast_ratio`, `apca_lc`, `is_large_text`, `WcagLevel::text_threshold`, and `apca_lookup_lc`.
+
+Plain output for black on white at the defaults:
+
+```
+#000000 on #ffffff
+WCAG 21.00:1   AA pass   AAA pass   normal text (16px / 400)
+APCA |Lc| 100.84   Lc75 pass   lookup Lc75
+```
+
+`|Lc|` is `apca_lc` for that pair, printed to 2 decimal places. The advisory note is a following line, omitted when the header bar equals the lookup. A stricter bar says `header Lc{n} is stricter than lookup Lc{n}`. A looser bar says `header Lc{n} is looser than lookup Lc{n}; body text may still need Lc{n}`. At 24px the lookup is Lc60, so `--apca 75` adds `header Lc75 is stricter than lookup Lc60`. The lookup does not change the exit code.
+
+Printed ratio and Lc are rounded to 2 decimal places. Pass/fail uses the full-precision ratio and `|Lc|`. Both AA and AAA are always reported. `--wcag` selects which of those two, together with the APCA bar, drives the exit code. Large text follows §7 (18px+, or 14px+ and weight ≥ 700).
+
+`--json` prints one object. Fields: `fg`, `bg` (normalized `#rrggbb`), `size_px`, `weight`, `large_text`, `ratio`, `wcag` (`level`, `pass`, `threshold`, plus `aa` and `aaa` each with `pass` and `threshold`), `apca` (`lc`, `abs`, `target`, `label`, `pass`, `lookup`, `polarity`, `note`), and `pass` (official WCAG and APCA both pass).
+
+Batch: `--pairs FILE`, `--pairs -`, or a non-TTY stdin when `--fg` / `--bg` / `--pairs` are omitted. Each non-empty line is two colors. Color functions may contain spaces (`rgb(0, 0, 0) #ffffff`). Blank lines are skipped. More than one pair prints a JSON array of the same objects, or the plain blocks separated by a blank line. Exit 1 if any pair fails. A bad color or a line that is not two colors exits 2 and prints no report.
+
+| Code | Meaning |
+|---|---|
+| 0 | Every pair passes the official WCAG level and the APCA bar |
+| 1 | At least one pair fails |
+| 2 | Bad arguments, unreadable file, or an unparsable color |
+
+### 25.3 `palette`
+
+```
+dd_wcag palette --primary #0B3D91 --secondary #C45508 --tertiary #1F7A4D --out ./theme
+```
+
+Primary, Secondary, and Tertiary are required. Omitted Support uses `#46BE8C`. The command calls `generate_palette` and writes that function's SCSS and tokens JSON unchanged. Text tokens stay the fixed ones from §8. Compliance thresholds stay the generator's fixed floors. They do not follow `--size` or the Contrast header.
+
+Pass `--out DIR`, `--stdout scss|json`, or `--json`. `--out` creates the directory and writes `_palette.scss` and `_palette.tokens.json`. `--stdout scss` or `--stdout json` pipes that artifact. `--json` prints a summary object: the four input hexes, `pass`, `blocking_failures`, `advisory_warnings`, every check (`label`, `ratio`, `threshold`, `passes`, `blocking`), and the written paths or null. `--stdout` and `--json` together are an error because both want stdout. When stdout is reserved, `Wrote` lines go to stderr.
+
+Exit 0 when there are no blocking failures. Exit 1 when any blocking check fails, after a successful write. Advisory warnings do not change the exit code. Exit 2 for a missing role, a bad color, a destination that is not a directory, or a write error.

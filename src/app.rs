@@ -4,12 +4,12 @@
 //! It includes the App struct with all fields for color management,
 //! input handling, and UI state as per the architecture spec.
 
-use crate::color::{is_large_text, Color};
+use crate::color::{Color, is_large_text};
 use crate::fix::{FixAxis, FixState};
 use crate::layout::{Hit, LayoutMap};
 use crate::palette::{
-    generate_palette, matrix_cell, parse_palette_color, validate_export, GeneratedPalette,
-    MatrixAxis, PaletteInput, PaletteState,
+    GeneratedPalette, MatrixAxis, PaletteInput, PaletteState, generate_palette, matrix_cell,
+    parse_palette_color, validate_export,
 };
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
