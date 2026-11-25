@@ -6,16 +6,21 @@
 
 use crate::color::{Color, is_large_text};
 use crate::fix::{FixAxis, FixState};
-use crate::layout::{Hit, LayoutMap};
+use crate::layout::{Breakpoint, Hit, LayoutMap};
 use crate::palette::{
     GeneratedPalette, MatrixAxis, PaletteInput, PaletteState, generate_palette, matrix_cell,
     parse_palette_color, validate_export,
 };
 use crate::theme::{Theme, ThemeSource};
 use palette::Srgb;
+use ratatui::layout::Rect;
 use std::time::{Duration, Instant};
 
 pub const TOAST_TTL: Duration = Duration::from_secs(5);
+
+/// Settings sheet pages. Themes is first. Help is last.
+pub const SETTINGS_NAV: [&str; 2] = ["Themes", "Help"];
+pub const SETTINGS_HELP: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -312,8 +317,13 @@ pub struct App {
     /// Color of `status`. Errors ignore this and use the error color.
     pub status_level: crate::toast_chrome::ToastKind,
     pub notification_updated_at: Option<Instant>,
-    pub show_keybindings: bool,
-    pub show_theme_debug: bool,
+    pub show_settings: bool,
+    pub settings_nav: u8,
+    pub help_scroll: u16,
+    pub help_scroll_max: u16,
+    pub settings_follow: bool,
+    pub settings_area: Rect,
+    pub settings_nav_area: Rect,
     pub theme_editor: Option<ldnddev_theme::ThemeEditor>,
     pub theme_picker: Option<ldnddev_theme::ThemePicker>,
     pub omarchy_paths: ldnddev_theme::OmarchyPaths,
@@ -325,11 +335,29 @@ pub struct App {
     pub copied_palette: Option<String>,
 }
 
+/// One footer row. Drops middle hints from the right when `width` is tight.
+/// `left` and `right` stay, so F1 and quit remain.
+fn fit_footer(width: u16, left: &[&str], middle: &[&str], right: &[&str]) -> String {
+    let limit = width as usize;
+    let mut mid: Vec<&str> = middle.to_vec();
+    loop {
+        let mut parts = Vec::with_capacity(left.len() + mid.len() + right.len());
+        parts.extend_from_slice(left);
+        parts.extend(mid.iter().copied());
+        parts.extend_from_slice(right);
+        let line = parts.join("  ");
+        if line.chars().count() <= limit || mid.is_empty() {
+            return line;
+        }
+        mid.pop();
+    }
+}
+
 impl App {
     #[cfg(test)]
     pub fn new() -> Self {
         let mut app = Self::with_theme(Theme::default(), ThemeSource::Default);
-        // No Omarchy themes here, so F2 opens the hex editor directly.
+        // No Omarchy themes here, so Settings opens the hex editor directly.
         app.omarchy_paths = ldnddev_theme::OmarchyPaths::from_root(std::path::Path::new(
             "/nonexistent/dd_wcag_omarchy",
         ));
@@ -387,8 +415,13 @@ impl App {
             status: None,
             status_level: crate::toast_chrome::ToastKind::Info,
             notification_updated_at: None,
-            show_keybindings: false,
-            show_theme_debug: false,
+            show_settings: false,
+            settings_nav: 0,
+            help_scroll: 0,
+            help_scroll_max: 0,
+            settings_follow: false,
+            settings_area: Rect::default(),
+            settings_nav_area: Rect::default(),
             theme_editor: None,
             theme_picker: None,
             omarchy_paths,
@@ -401,24 +434,70 @@ impl App {
         }
     }
 
+    /// Open the Settings sheet on Themes.
+    /// A picker when Omarchy themes are installed, otherwise the color editor.
     pub fn open_theme_ui(&mut self) {
-        self.show_keybindings = false;
-        self.show_theme_debug = true;
+        if self.show_settings {
+            return;
+        }
+        self.show_settings = true;
+        self.settings_nav = 0;
+        self.help_scroll = 0;
+        self.settings_follow = true;
         let palette = crate::theme::palette_from_theme(&self.theme);
+        let extras = crate::theme::extra_theme_fields();
         let picker =
-            ldnddev_theme::ThemePicker::new(palette.clone(), &[], self.omarchy_paths.clone());
+            ldnddev_theme::ThemePicker::new(palette.clone(), extras, self.omarchy_paths.clone());
         if picker.lists_omarchy() {
             self.theme_picker = Some(picker);
             self.theme_editor = None;
         } else {
             self.theme_picker = None;
-            self.theme_editor = Some(ldnddev_theme::ThemeEditor::new(palette, &[]));
+            self.theme_editor = Some(ldnddev_theme::ThemeEditor::new(palette, extras));
         }
+    }
+
+    pub fn footer_hint(&self, width: u16) -> String {
+        let fix_modal = self.fix_open && matches!(self.layout.breakpoint, Breakpoint::Narrow);
+        if self.show_settings || fix_modal {
+            return if width < 80 {
+                "F1:Settings  Esc:Close  ^Q:Quit".to_string()
+            } else {
+                "F1: Settings  Esc: Close  Ctrl+Q: Quit".to_string()
+            };
+        }
+
+        let (f1, quit) = if width < 80 {
+            ("F1:Settings", "^Q:Quit")
+        } else {
+            ("F1: Settings", "Ctrl+Q: Quit")
+        };
+        let middle: &[&str] = if width < 80 {
+            &["Tab:Focus", "Ctrl+G:Gen", "Ctrl+F:Fix", "Ctrl+O:Web"]
+        } else if width < 120 {
+            &[
+                "Tab: Focus",
+                "1/2: Tabs",
+                "Ctrl+G: Generate",
+                "Ctrl+F: Fix",
+                "Ctrl+O: Web",
+            ]
+        } else {
+            &[
+                "Tab: Focus",
+                "1/2: Contrast/Palette",
+                "Ctrl+G: Generate",
+                "Ctrl+F: Fix",
+                "Ctrl+O: Web",
+                "(mouse: click/scroll/drag)",
+            ]
+        };
+        fit_footer(width, &[f1], middle, &[quit])
     }
 
     /// Re-read `omarchy: follow` when the desktop theme file changes.
     pub fn refresh_followed_theme(&mut self) -> bool {
-        if self.show_theme_debug || self.theme_picker.is_some() || self.theme_editor.is_some() {
+        if self.show_settings {
             return false;
         }
         if !matches!(

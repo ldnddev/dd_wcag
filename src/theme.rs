@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 pub const PROJECT_THEME_FILE: &str = "dd_wcag_theme.yml";
 pub const SUPPORTED_THEME_VERSION: u16 = 1;
 
-const THEME_KEYS: [&str; 26] = [
+const THEME_KEYS: [&str; 27] = [
     "base_background",
     "body_background",
     "modal_background",
@@ -16,6 +16,7 @@ const THEME_KEYS: [&str; 26] = [
     "text_active_focus",
     "modal_labels",
     "modal_text",
+    "modal_header",
     "selected_background",
     "border_default",
     "border_active",
@@ -72,6 +73,7 @@ pub struct Theme {
     pub text_active_focus: String,
     pub modal_labels: String,
     pub modal_text: String,
+    pub modal_header: String,
     pub selected_background: String,
     pub border_default: String,
     pub border_active: String,
@@ -108,6 +110,7 @@ impl Default for Theme {
             text_active_focus: "#64B4F5".to_string(),
             modal_labels: "#64B4F5".to_string(),
             modal_text: "#F5F6F7".to_string(),
+            modal_header: "#64B4F5".to_string(),
             selected_background: "#0F1114".to_string(),
             border_default: "#F5F6F7".to_string(),
             border_active: "#64B4F5".to_string(),
@@ -188,6 +191,7 @@ impl Theme {
             ("text_active_focus", &self.text_active_focus),
             ("modal_labels", &self.modal_labels),
             ("modal_text", &self.modal_text),
+            ("modal_header", &self.modal_header),
             ("selected_background", &self.selected_background),
             ("border_default", &self.border_default),
             ("border_active", &self.border_active),
@@ -314,6 +318,7 @@ impl Theme {
             "text_active_focus" => self.text_active_focus = value,
             "modal_labels" => self.modal_labels = value,
             "modal_text" => self.modal_text = value,
+            "modal_header" => self.modal_header = value,
             "selected_background" => self.selected_background = value,
             "border_default" => self.border_default = value,
             "border_active" => self.border_active = value,
@@ -369,6 +374,10 @@ impl Theme {
 
     pub fn modal_text_color(&self) -> Color {
         color_or_reset(&self.modal_text)
+    }
+
+    pub fn modal_header_color(&self) -> Color {
+        color_or_reset(&self.modal_header)
     }
 
     pub fn selected_background_color(&self) -> Color {
@@ -441,6 +450,10 @@ pub fn palette_from_theme(theme: &Theme) -> ldnddev_theme::Palette {
     palette
 }
 
+pub fn extra_theme_fields() -> &'static [ldnddev_theme::ColorField] {
+    &[ldnddev_theme::EXTRA_MODAL_HEADER]
+}
+
 pub fn apply_palette(theme: &mut Theme, palette: &ldnddev_theme::Palette) {
     theme.omarchy = palette.omarchy.clone();
     theme.overrides = palette.overrides.clone();
@@ -448,6 +461,9 @@ pub fn apply_palette(theme: &mut Theme, palette: &ldnddev_theme::Palette) {
         if let Some(rgb) = palette.get(field.key) {
             theme.set_token(field.key, &rgb.to_hex());
         }
+    }
+    if let Some(rgb) = palette.get("modal_header") {
+        theme.set_token("modal_header", &rgb.to_hex());
     }
 }
 

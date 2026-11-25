@@ -222,11 +222,11 @@ Header is **interactive** (tabs + targets). No branding tagline in v1.
 
 Footer is help text, not a hit target (except F1 remains a key). Width-adaptive:
 
-- `< 75`: `F1:Help  F2:Theme  Tab:Focus  f:Fix  g:Gen  Ctrl+O:Web  Ctrl+Q:Quit`
-- mid: slightly longer
-- `>= 110`: append `(mouse: click/scroll/drag)`
+- below 80: `F1:Settings` and `^Q:Quit`, with app hints in the middle when they fit
+- 80 and wider: `F1: Settings` and `Ctrl+Q: Quit`
+- while Settings or the Fix modal is open: `F1:Settings  Esc:Close  ^Q:Quit`, or the spaced form at 80 and wider
 
-Theme source is **not** persistent in the footer. It appears in F2 and as a startup toast.
+F1 and F2 toggle one Settings sheet (Themes, then Help). A second press closes it and restores the theme snapshot. Theme source is a startup toast and the Themes page, not a persistent footer token.
 
 ---
 

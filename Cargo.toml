@@ -1,10 +1,17 @@
+[workspace]
+members = [
+    "crates/ldnddev_theme",
+    "crates/dd_wcag_gui",
+]
+# The TUI binary is the root package. The GUI crate is a member so CI and
+# `cargo deny` see it, and it stays off this list so `cargo build` and the
+# TUI install.sh do not compile GPUI.
+default-members = [".", "crates/ldnddev_theme"]
+
 [package]
 name = "dd_wcag"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
-
-[workspace]
-members = ["crates/ldnddev_theme"]
 
 [profile.release]
 opt-level = "z"

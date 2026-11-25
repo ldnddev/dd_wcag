@@ -90,20 +90,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     render_footer(frame, app, shell.footer);
 
-    if app.show_keybindings {
-        let popup = centered(size, 84, 84);
-        map.popup_area = Some(popup);
-        render_keybindings_popup(frame, app, popup);
-    } else if app.show_theme_debug {
-        let popup = centered(size, 72, 82);
-        map.popup_area = Some(popup);
-        render_theme_debug_popup(frame, app, popup);
-    }
-
-    if !app.show_keybindings && !app.show_theme_debug {
-        if let Some((x, y)) = cursor_position(app, &map) {
-            frame.set_cursor_position((x, y));
-        }
+    if app.show_settings {
+        render_settings(frame, app, shell.body);
+    } else if let Some((x, y)) = cursor_position(app, &map) {
+        frame.set_cursor_position((x, y));
     }
 
     if let Some(toast) = render_toast(frame, app, size) {
@@ -166,13 +156,7 @@ fn paint_tab(frame: &mut Frame, app: &App, area: Rect, label: &str, active: bool
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let keys = if area.width < 75 {
-        "F1:Help  F2:Theme  Tab:Focus  Ctrl+G:Gen  Ctrl+F:Fix  Ctrl+O:Web  Ctrl+Q:Quit"
-    } else if area.width < 110 {
-        "F1: Help   F2: Theme   Tab: Focus   1/2: Tabs   Ctrl+G: Generate   Ctrl+F: Fix   Ctrl+O: Web   Ctrl+Q: Quit"
-    } else {
-        "F1: Help   F2: Theme   Tab: Focus   1/2: Contrast/Palette   Ctrl+G: Generate   Ctrl+F: Fix   Ctrl+O: Web   Ctrl+Q: Quit   (mouse: click/scroll/drag)"
-    };
+    let keys = app.footer_hint(area.width);
     frame.render_widget(
         Paragraph::new(keys).alignment(Alignment::Left).style(
             Style::default()
@@ -1354,264 +1338,430 @@ fn render_vertical_scrollbar(
     );
 }
 
-fn render_keybindings_popup(frame: &mut Frame, app: &App, popup: Rect) {
-    frame.render_widget(Clear, popup);
-    let lines = vec![
-        Line::from("Navigation"),
-        Line::from("1 / 2: Contrast / Palette"),
-        Line::from(
-            "Tab / Shift+Tab: next/prev control (auto-apply; invalid color blocks the move)",
-        ),
-        Line::from("Left / Right: caret in a text field; Style chips: previous/next preset"),
-        Line::from("Up / Down: Size/Weight step; Style chips: previous/next; Palette list scroll"),
-        Line::from("Home / End / Delete: caret and forward-delete in a text field"),
-        Line::from(
-            "Ctrl+V or terminal paste: paste into the focused field (valid color replaces it)",
-        ),
-        Line::from("Ctrl+Up / Ctrl+Down: step the focused Size, Weight, Style, or Fix gauge"),
-        Line::from("Shift+Ctrl+Up / Shift+Ctrl+Down: larger step (size ±4, weight ±200)"),
-        Line::from(
-            "Enter: commit field, activate button, edit palette role, newline in PreviewText",
-        ),
-        Line::from("Backspace: delete before caret"),
-        Line::from("Esc: blur edit, close Fix, close this popup or F2 (never quits)"),
-        Line::from("Ctrl+Q: quit"),
-        Line::from(""),
-        Line::from("Contrast"),
-        Line::from("Ctrl+S: cycle Regular / Bold / Italic / Bold+Italic"),
-        Line::from("Left/Right or Up/Down on Style: select a chip (underlined = keyboard focus)"),
-        Line::from("Ctrl+B: toggle bold (400↔700)   Ctrl+T: cycle font family presets"),
-        Line::from("Space: swap FG/BG (on Style: apply the focused chip)"),
-        Line::from("Ctrl+C: copy focused hex   Ctrl+V: paste   Ctrl+F: Fix   Ctrl+O: web preview"),
-        Line::from("Click WCAG / APCA (or Tab there, then Enter/←/→): cycle AA↔AAA / Lc45–90"),
-        Line::from(
-            "Fix: Ctrl+N next candidate  Enter Apply/Next/Close  [ ] lightness  { } hue  drag gauges",
-        ),
-        Line::from(
-            "Fix → Palette: FG→ / BG→ chips set Pri/Sec/Ter/Sup. p/s/t/u send the focused axis",
-        ),
-        Line::from("PageUp / PageDown: scroll the left column when it does not fit"),
-        Line::from("Mouse wheel over the left column: scroll (size/weight still step)"),
-        Line::from(""),
-        Line::from("Palette"),
-        Line::from("Ctrl+G: generate _palette.scss and select the worst failing pair"),
-        Line::from("Enter: edit role / generate / open Fix for the selected matrix pair"),
-        Line::from("Arrows on the matrix skip the diagonal   Space: swap text \\ surface"),
-        Line::from("Click a cell to select it   Double-click or Enter: open Fix"),
-        Line::from("Click Text: select the Text axis   PageUp/Down: scroll generated output"),
-        Line::from("Ctrl+S: save SCSS + Penpot/Figma tokens JSON   Ctrl+C: copy SCSS"),
-        Line::from(""),
-        Line::from("F1: this help   F2: theme list (Enter apply, e edit, s save)"),
-        Line::from(""),
-        Line::from("Mouse"),
-        Line::from("Click a field: focus + place caret   Click tab / WCAG / APCA: switch or cycle"),
-        Line::from("Click ↓/↑: step size or weight   Wheel over size/weight: same as Ctrl+Up/Down"),
-        Line::from("Click a style chip: apply it   Click Swap / Copy / Fix / Web: that action"),
-        Line::from("Click toast: dismiss   Click outside F1/F2: close"),
-        Line::from("Shift+click a swatch: copy that hex   Drag a scrollbar: jump in the list"),
-    ];
+fn settings_top(title: &str, width: usize, edge: Style, title_style: Style) -> Line<'static> {
+    let width = width.max(2);
+    let inner = width - 2;
+    let mut label = format!(" {title} ");
+    if label.chars().count() > inner {
+        label = label.chars().take(inner).collect();
+    }
+    let pad = inner - label.chars().count();
+    Line::from(vec![
+        Span::styled("┌", edge),
+        Span::styled(label, title_style),
+        Span::styled(format!("{}┐", "─".repeat(pad)), edge),
+    ])
+}
+
+fn settings_bottom(width: usize, edge: Style) -> Line<'static> {
+    let width = width.max(2);
+    Line::from(Span::styled(format!("└{}┘", "─".repeat(width - 2)), edge))
+}
+
+fn settings_row(body: &str, width: usize, edge: Style, fill: Style) -> Line<'static> {
+    let width = width.max(2);
+    let inner = width - 2;
+    let mut text: String = body.chars().take(inner).collect();
+    let pad = inner - text.chars().count();
+    text.push_str(&" ".repeat(pad));
+    Line::from(vec![
+        Span::styled("│", edge),
+        Span::styled(text, fill),
+        Span::styled("│", edge),
+    ])
+}
+
+fn paint_settings_nav(frame: &mut Frame, app: &App, nav: Rect) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(app.theme.border_default_color()))
+        .style(
+            Style::default()
+                .bg(app.theme.body_background_color())
+                .fg(app.theme.modal_text_color()),
+        );
+    let inner = block.inner(nav);
+    frame.render_widget(block, nav);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let selected_style = Style::default()
+        .fg(app.theme.text_active_focus_color())
+        .bg(app.theme.selected_background_color());
+    let idle = Style::default()
+        .fg(app.theme.modal_text_color())
+        .bg(app.theme.body_background_color());
+    let width = inner.width as usize;
+    let mut lines = Vec::new();
+    for (index, label) in crate::app::SETTINGS_NAV.iter().enumerate() {
+        let on = app.settings_nav == index as u8;
+        let marker = if on { ">" } else { " " };
+        let text: String = format!("{marker} {label}").chars().take(width).collect();
+        let style = if on { selected_style } else { idle };
+        lines.push(Line::from(Span::styled(text, style)));
+    }
     frame.render_widget(
-        Paragraph::new(lines)
-            .style(
-                Style::default()
-                    .fg(app.theme.modal_text_color())
-                    .bg(app.theme.modal_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title(Line::styled(
-                        "Keys & Mouse",
-                        Style::default().fg(app.theme.modal_labels_color()),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_active_color()))
-                    .style(Style::default().bg(app.theme.modal_background_color())),
-            )
-            .wrap(Wrap { trim: true }),
-        popup,
+        Paragraph::new(lines).style(
+            Style::default()
+                .bg(app.theme.body_background_color())
+                .fg(app.theme.modal_text_color()),
+        ),
+        inner,
     );
 }
 
-fn render_theme_debug_popup(frame: &mut Frame, app: &App, popup: Rect) {
-    frame.render_widget(Clear, popup);
-    if let Some(editor) = &app.theme_editor {
-        render_theme_editor(frame, app, popup, editor);
-        return;
-    }
-    if let Some(picker) = &app.theme_picker {
-        render_theme_picker(frame, app, popup, picker);
-        return;
-    }
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Source:  ",
-                Style::default().fg(app.theme.modal_labels_color()),
-            ),
-            Span::styled(
-                app.theme_source.label(),
-                Style::default().fg(app.theme.modal_text_color()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "Version: ",
-                Style::default().fg(app.theme.modal_labels_color()),
-            ),
-            Span::styled(
-                app.theme.version.to_string(),
-                Style::default().fg(app.theme.modal_text_color()),
-            ),
-        ]),
-        Line::from(""),
-    ];
-    for (key, value) in app.theme.tokens() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{key:<22}"),
-                Style::default().fg(app.theme.modal_labels_color()),
-            ),
-            Span::styled(value.to_string(), Style::default().fg(theme_color(value))),
-        ]));
-    }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(
-                Style::default()
-                    .fg(app.theme.modal_text_color())
-                    .bg(app.theme.modal_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title(Line::styled(
-                        "Theme",
-                        Style::default().fg(app.theme.modal_labels_color()),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_active_color()))
-                    .style(Style::default().bg(app.theme.modal_background_color())),
-            )
-            .wrap(Wrap { trim: true }),
-        popup,
-    );
-}
-
-fn render_theme_editor(
+fn paint_settings_lines(
     frame: &mut Frame,
-    app: &App,
-    popup: Rect,
-    editor: &ldnddev_theme::ThemeEditor,
+    app: &mut App,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    selected_line: Option<usize>,
 ) {
-    use ldnddev_theme::{ThemeEditorRow, theme_editor_rows};
-    let rows = theme_editor_rows(&editor.fields);
-    let channel = ["R", "G", "B"][editor.channel.min(2)];
-    let target = editor.save_target.label().to_uppercase();
-    let esc = if app.theme_picker.is_some() {
-        "Esc back"
-    } else {
-        "Esc revert"
+    if area.width == 0 || area.height == 0 {
+        app.help_scroll_max = 0;
+        app.help_scroll = 0;
+        return;
+    }
+    let view_h = area.height as usize;
+    let max_scroll = lines.len().saturating_sub(view_h) as u16;
+    app.help_scroll_max = max_scroll;
+    if app.settings_follow {
+        if let Some(sel) = selected_line {
+            let top = app.help_scroll as usize;
+            if sel < top {
+                app.help_scroll = sel as u16;
+            } else if sel >= top + view_h {
+                app.help_scroll = (sel + 1 - view_h) as u16;
+            }
+        }
+        app.settings_follow = false;
+    }
+    if app.help_scroll > max_scroll {
+        app.help_scroll = max_scroll;
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(app.theme.modal_text_color())
+                    .bg(app.theme.modal_background_color()),
+            )
+            .scroll((app.help_scroll, 0)),
+        area,
+    );
+}
+
+fn render_settings(frame: &mut Frame, app: &mut App, body: Rect) {
+    use ldnddev_theme::{PickerRow, ThemeEditorRow, theme_editor_rows};
+    if body.width == 0 || body.height == 0 {
+        app.settings_area = Rect::default();
+        app.settings_nav_area = Rect::default();
+        return;
+    }
+    let width = (body.width / 2).max(1).min(body.width);
+    let area = Rect {
+        x: body.x + body.width.saturating_sub(width),
+        y: body.y,
+        width,
+        height: body.height,
     };
-    let mut lines = vec![
-        Line::from(format!(
-            "Save: {target} (Tab)   Channel: {channel} ([/])   Y save   R reset   {esc}"
-        )),
-        Line::from(if editor.editing_hex {
-            format!("Hex: {}█   Enter apply", editor.hex_draft)
+    app.settings_area = area;
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Settings ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border_active_color()))
+        .title_style(
+            Style::default()
+                .fg(app.theme.modal_header_color())
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(
+            Style::default()
+                .bg(app.theme.modal_background_color())
+                .fg(app.theme.modal_text_color()),
+        );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        app.settings_nav_area = Rect::default();
+        return;
+    }
+
+    if app.settings_nav as usize >= crate::app::SETTINGS_NAV.len() {
+        app.settings_nav = 0;
+    }
+
+    let nav_w = {
+        let spare = inner.width.saturating_sub(8);
+        if spare == 0 {
+            1.min(inner.width)
         } else {
-            format!("Hex: {}   Enter to type   +/- nudge", editor.hex_draft)
-        }),
-        Line::from(""),
-    ];
-    let view_h = popup.height.saturating_sub(6) as usize;
-    let start = rows
-        .iter()
-        .position(|row| match row {
-            ThemeEditorRow::Color(idx) => *idx >= editor.scroll,
-            ThemeEditorRow::Header(_) => false,
-        })
-        .unwrap_or(0);
-    let start = if start > 0 && matches!(rows[start - 1], ThemeEditorRow::Header(_)) {
-        start - 1
-    } else {
-        start
+            14.min(spare).max(1)
+        }
     };
-    for row in rows.iter().skip(start).take(view_h.max(1)) {
-        match row {
-            ThemeEditorRow::Header(name) => lines.push(Line::from(*name)),
-            ThemeEditorRow::Color(idx) => {
-                let field = editor.fields[*idx];
-                let hex = editor
-                    .palette
-                    .get(field.key)
-                    .map(|c| c.to_hex())
-                    .unwrap_or_else(|| "#000000".into());
-                let cursor = if *idx == editor.selected { ">" } else { " " };
-                lines.push(Line::from(format!("{cursor} {:<22} {hex}", field.key)));
+    let [nav, page] =
+        Layout::horizontal([Constraint::Length(nav_w), Constraint::Min(1)]).areas(inner);
+    app.settings_nav_area = nav;
+
+    let section = crate::app::SETTINGS_NAV
+        .get(app.settings_nav as usize)
+        .copied()
+        .unwrap_or("Themes");
+    paint_settings_nav(frame, app, nav);
+
+    let title_h = u16::from(page.height > 0);
+    let title_area = Rect {
+        x: page.x,
+        y: page.y,
+        width: page.width,
+        height: title_h,
+    };
+    let content = Rect {
+        x: page.x,
+        y: page.y.saturating_add(title_h),
+        width: page.width,
+        height: page.height.saturating_sub(title_h),
+    };
+    if title_h > 0 {
+        let shown: String = section.chars().take(page.width as usize).collect();
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                shown,
+                Style::default()
+                    .fg(app.theme.modal_header_color())
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .style(
+                Style::default()
+                    .bg(app.theme.modal_background_color())
+                    .fg(app.theme.modal_header_color()),
+            ),
+            title_area,
+        );
+    }
+
+    if app.settings_nav == crate::app::SETTINGS_HELP {
+        let header = Style::default()
+            .fg(app.theme.modal_header_color())
+            .add_modifier(Modifier::BOLD);
+        let lines = help_lines(header, content.width.max(1) as usize);
+        paint_settings_lines(frame, app, content, lines, None);
+        return;
+    }
+
+    let editor = app.theme_editor.clone();
+    let picker = app.theme_picker.clone();
+    let box_w = (content.width as usize).max(2);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut selected_line = None;
+    let rule = Style::default().fg(app.theme.border_default_color());
+    let header = Style::default()
+        .fg(app.theme.modal_header_color())
+        .add_modifier(Modifier::BOLD);
+
+    let hint = if let Some(editor) = &editor {
+        let target = editor.save_target.label();
+        if picker.is_some() {
+            format!("Tab section   j/k move   t target   y save {target}   R reset   Esc back")
+        } else {
+            format!("Tab section   j/k move   t target   y save {target}   R reset   Esc revert")
+        }
+    } else {
+        "Tab section   j/k move   Enter apply   e colors   y save   t target   Esc revert"
+            .to_string()
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
+        Style::default().fg(app.theme.text_secondary_color()),
+    )));
+
+    if let Some(editor) = &editor {
+        let hex_label = Style::default().fg(app.theme.modal_labels_color());
+        if editor.editing_hex {
+            lines.push(Line::from(vec![
+                Span::styled("Hex: ", hex_label),
+                Span::raw(editor.hex_draft.clone()),
+                Span::styled(
+                    " ",
+                    Style::default()
+                        .bg(app.theme.cursor_color())
+                        .fg(app.theme.modal_background_color()),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Hex: ", hex_label),
+                Span::raw(format!("{}   Enter edit", editor.hex_draft)),
+            ]));
+        }
+        let selected_style = Style::default()
+            .fg(app.theme.text_active_focus_color())
+            .bg(app.theme.selected_background_color());
+        let idle = Style::default().fg(app.theme.modal_text_color());
+        let mut open = false;
+        for row in theme_editor_rows(&editor.fields) {
+            match row {
+                ThemeEditorRow::Header(name) => {
+                    if open {
+                        lines.push(settings_bottom(box_w, rule));
+                    }
+                    lines.push(Line::from(""));
+                    lines.push(settings_top(name, box_w, rule, header));
+                    open = true;
+                }
+                ThemeEditorRow::Color(idx) => {
+                    if idx == editor.selected {
+                        selected_line = Some(lines.len());
+                    }
+                    let field = editor.fields[idx];
+                    let hex = editor
+                        .palette
+                        .get(field.key)
+                        .map(|color| color.to_hex())
+                        .unwrap_or_else(|| "#000000".into());
+                    let cursor = if idx == editor.selected { ">" } else { " " };
+                    let style = if idx == editor.selected {
+                        selected_style
+                    } else {
+                        idle
+                    };
+                    lines.push(settings_row(
+                        &format!("{cursor} {:<22} {hex}", field.key),
+                        box_w,
+                        rule,
+                        style,
+                    ));
+                }
+            }
+        }
+        if open {
+            lines.push(settings_bottom(box_w, rule));
+        }
+    } else if let Some(picker) = &picker {
+        lines.push(Line::from(""));
+        lines.push(settings_top("Themes", box_w, rule, header));
+        let selected_style = Style::default()
+            .fg(app.theme.text_active_focus_color())
+            .bg(app.theme.selected_background_color());
+        let idle = Style::default().fg(app.theme.modal_text_color());
+        for (idx, row) in picker.rows.iter().enumerate() {
+            if idx == picker.selected {
+                selected_line = Some(lines.len());
+            }
+            let (label, detail) = match row {
+                PickerRow::Follow { name } => ("Follow desktop".to_string(), name.clone()),
+                PickerRow::Theme(theme) => (theme.name.clone(), theme.mode.label().to_string()),
+                PickerRow::Custom => ("Custom".to_string(), "built-in".to_string()),
+            };
+            let cursor = if idx == picker.selected { ">" } else { " " };
+            let style = if idx == picker.selected {
+                selected_style
+            } else {
+                idle
+            };
+            lines.push(settings_row(
+                &format!("{cursor} {label:<22} {detail}"),
+                box_w,
+                rule,
+                style,
+            ));
+        }
+        lines.push(settings_bottom(box_w, rule));
+    }
+
+    paint_settings_lines(frame, app, content, lines, selected_line);
+}
+
+enum HelpEntry {
+    Header(&'static str),
+    Body(&'static str),
+}
+
+const HELP_TEXT: &[HelpEntry] = &[
+    HelpEntry::Header("Global"),
+    HelpEntry::Body("F1: Settings"),
+    HelpEntry::Body("Ctrl+Q: quit"),
+    HelpEntry::Body("F2: Settings (same sheet)"),
+    HelpEntry::Body("Esc: blur edit, close Fix, close Settings (never quits)"),
+    HelpEntry::Body(""),
+    HelpEntry::Header("Navigation"),
+    HelpEntry::Body("1 / 2: Contrast / Palette"),
+    HelpEntry::Body(
+        "Tab / Shift+Tab: next/prev control (auto-apply; invalid color blocks the move)",
+    ),
+    HelpEntry::Body("Left / Right: caret in a text field; Style chips: previous/next preset"),
+    HelpEntry::Body("Up / Down: Size/Weight step; Style chips: previous/next; Palette list scroll"),
+    HelpEntry::Body("Home / End / Delete: caret and forward-delete in a text field"),
+    HelpEntry::Body(
+        "Ctrl+V or terminal paste: paste into the focused field (valid color replaces it)",
+    ),
+    HelpEntry::Body("Ctrl+Up / Ctrl+Down: step the focused Size, Weight, Style, or Fix gauge"),
+    HelpEntry::Body("Shift+Ctrl+Up / Shift+Ctrl+Down: larger step (size ±4, weight ±200)"),
+    HelpEntry::Body(
+        "Enter: commit field, activate button, edit palette role, newline in PreviewText",
+    ),
+    HelpEntry::Body("Backspace: delete before caret"),
+    HelpEntry::Body(""),
+    HelpEntry::Header("Contrast"),
+    HelpEntry::Body("Ctrl+S: cycle Regular / Bold / Italic / Bold+Italic"),
+    HelpEntry::Body("Left/Right or Up/Down on Style: select a chip (underlined = keyboard focus)"),
+    HelpEntry::Body("Ctrl+B: toggle bold (400↔700)   Ctrl+T: cycle font family presets"),
+    HelpEntry::Body("Space: swap FG/BG (on Style: apply the focused chip)"),
+    HelpEntry::Body("Ctrl+C: copy focused hex   Ctrl+V: paste   Ctrl+F: Fix   Ctrl+O: web preview"),
+    HelpEntry::Body("Click WCAG / APCA (or Tab there, then Enter/←/→): cycle AA↔AAA / Lc45–90"),
+    HelpEntry::Body(
+        "Fix: Ctrl+N next candidate  Enter Apply/Next/Close  [ ] lightness  { } hue  drag gauges",
+    ),
+    HelpEntry::Body(
+        "Fix → Palette: FG→ / BG→ chips set Pri/Sec/Ter/Sup. p/s/t/u send the focused axis",
+    ),
+    HelpEntry::Body("PageUp / PageDown: scroll the left column when it does not fit"),
+    HelpEntry::Body("Mouse wheel over the left column: scroll (size/weight still step)"),
+    HelpEntry::Body(""),
+    HelpEntry::Header("Palette"),
+    HelpEntry::Body("Ctrl+G: generate _palette.scss and select the worst failing pair"),
+    HelpEntry::Body("Enter: edit role / generate / open Fix for the selected matrix pair"),
+    HelpEntry::Body("Arrows on the matrix skip the diagonal   Space: swap text \\ surface"),
+    HelpEntry::Body("Click a cell to select it   Double-click or Enter: open Fix"),
+    HelpEntry::Body("Click Text: select the Text axis   PageUp/Down: scroll generated output"),
+    HelpEntry::Body("Ctrl+S: save SCSS + Penpot/Figma tokens JSON   Ctrl+C: copy SCSS"),
+    HelpEntry::Body(""),
+    HelpEntry::Body("Themes: j/k preview   Enter apply   e colors   t target   y/s save"),
+    HelpEntry::Body(""),
+    HelpEntry::Header("Mouse"),
+    HelpEntry::Body(
+        "Click a field: focus + place caret   Click tab / WCAG / APCA: switch or cycle",
+    ),
+    HelpEntry::Body(
+        "Click ↓/↑: step size or weight   Wheel over size/weight: same as Ctrl+Up/Down",
+    ),
+    HelpEntry::Body("Click a style chip: apply it   Click Swap / Copy / Fix / Web: that action"),
+    HelpEntry::Body("Click toast: dismiss   Click a Settings nav row: change page"),
+    HelpEntry::Body("Shift+click a swatch: copy that hex   Drag a scrollbar: jump in the list"),
+];
+
+fn help_lines(header: Style, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    for entry in HELP_TEXT {
+        match *entry {
+            HelpEntry::Header(text) => {
+                let shown: String = text.chars().take(width).collect();
+                lines.push(Line::from(Span::styled(shown, header)));
+            }
+            HelpEntry::Body(text) => {
+                if text.is_empty() {
+                    lines.push(Line::from(""));
+                } else {
+                    for part in crate::layout::visual_lines(text, width) {
+                        lines.push(Line::from(part));
+                    }
+                }
             }
         }
     }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(
-                Style::default()
-                    .fg(app.theme.modal_text_color())
-                    .bg(app.theme.modal_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title("F2 Theme editor")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_active_color())),
-            ),
-        popup,
-    );
-}
-
-fn render_theme_picker(
-    frame: &mut Frame,
-    app: &App,
-    popup: Rect,
-    picker: &ldnddev_theme::ThemePicker,
-) {
-    use ldnddev_theme::PickerRow;
-    let target = picker.save_target.label().to_uppercase();
-    let mut lines = vec![
-        Line::from(format!(
-            "Save: {target} (Tab)   Enter apply   e edit   s save   Esc revert"
-        )),
-        Line::from(""),
-    ];
-    let view_h = popup.height.saturating_sub(5) as usize;
-    for (idx, row) in picker
-        .rows
-        .iter()
-        .enumerate()
-        .skip(picker.scroll)
-        .take(view_h.max(1))
-    {
-        let (label, detail) = match row {
-            PickerRow::Follow { name } => ("Follow desktop".to_string(), name.clone()),
-            PickerRow::Theme(theme) => (theme.name.clone(), theme.mode.label().to_string()),
-            PickerRow::Custom => ("Custom".to_string(), "built-in".to_string()),
-        };
-        let cursor = if idx == picker.selected { ">" } else { " " };
-        lines.push(Line::from(format!("{cursor} {label:<22} {detail}")));
-    }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(
-                Style::default()
-                    .fg(app.theme.modal_text_color())
-                    .bg(app.theme.modal_background_color()),
-            )
-            .block(
-                Block::default()
-                    .title("F2 Themes")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(app.theme.border_active_color())),
-            ),
-        popup,
-    );
+    lines
 }
 
 fn theme_color(input: &str) -> ratatui::style::Color {

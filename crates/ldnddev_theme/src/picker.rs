@@ -82,6 +82,13 @@ impl ThemePicker {
         }
     }
 
+    /// Paint the highlighted row into [`Self::palette`].
+    /// The snapshot from [`Self::new`] stays, so Esc can still revert.
+    /// `handle` does not call this for j/k; the sheet calls it after the move.
+    pub fn preview_selected(&mut self) -> PickerOutcome {
+        self.apply_selected()
+    }
+
     pub fn handle(&mut self, key: EditorKey) -> PickerOutcome {
         match key {
             EditorKey::Esc => {

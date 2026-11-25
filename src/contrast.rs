@@ -659,7 +659,45 @@ fn paint_conversion_row(
 }
 
 fn weight_label(app: &App) -> &'static str {
-    if app.weight >= 700 { "bold" } else { "normal" }
+    weight_word(app.weight)
+}
+
+fn weight_word(weight: u16) -> &'static str {
+    if weight >= 700 { "bold" } else { "normal" }
+}
+
+/// AA/AAA flags used by the terminal panel and the window body.
+/// Thresholds match the WCAG panel: 4.5 / 3.0 / 7.0 / 4.5 / 3.0.
+fn wcag_flags(ratio: f64) -> (bool, bool, bool, bool, bool) {
+    (
+        ratio >= 4.5,
+        ratio >= 3.0,
+        ratio >= 7.0,
+        ratio >= 4.5,
+        ratio >= 3.0,
+    )
+}
+
+/// Ratio line plus AA/AAA result. Same flags as [`render_contrast`]'s WCAG panel.
+pub fn contrast_body_text(
+    fg: &crate::color::Color,
+    bg: &crate::color::Color,
+    size_px: u16,
+    weight: u16,
+) -> String {
+    let ratio = fg.contrast_ratio(bg);
+    let (aa_normal, aa_large, aaa_normal, aaa_large, ui) = wcag_flags(ratio);
+    let aa = if aa_normal { "pass" } else { "fail" };
+    let aaa = if aaa_normal { "pass" } else { "fail" };
+    format!(
+        "{size_px}px {} | ratio {ratio:.2}\nAA {aa}  AAA {aaa}\nAA n{} l{}  AAA n{} l{}  UI{}",
+        weight_word(weight),
+        mark(aa_normal),
+        mark(aa_large),
+        mark(aaa_normal),
+        mark(aaa_large),
+        mark(ui)
+    )
 }
 
 fn fill_wcag_panel(buf: &mut Buffer, app: &App, area: Rect) {
@@ -669,11 +707,7 @@ fn fill_wcag_panel(buf: &mut Buffer, app: &App, area: Rect) {
     let large = is_large_text(size, app.weight);
     let threshold = app.targets.wcag.text_threshold(large);
     let current_pass = ratio >= threshold;
-    let aa_normal = ratio >= 4.5;
-    let aa_large = ratio >= 3.0;
-    let aaa_normal = ratio >= 7.0;
-    let aaa_large = ratio >= 4.5;
-    let ui = ratio >= 3.0;
+    let (aa_normal, aa_large, aaa_normal, aaa_large, ui) = wcag_flags(ratio);
     let labels = Style::default().fg(app.theme.text_labels_color());
 
     let mut lines = vec![
