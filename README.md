@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh |
 The installer detects OS and CPU, downloads the matching GitHub Release package when one exists (Linux glibc x86_64/arm64, macOS Intel/Apple Silicon), and puts the binary in `~/.local/bin`. Alpine/musl and unpublished targets fall back to a cargo build. A default theme is copied to `~/.config/ldnddev/` only if that file is missing. On Linux it writes a launcher under `~/.local/share/applications/` (`dd_wcag.desktop` opens a terminal; `dd_wcag-gui.desktop` opens the window). Pin a release with `--version`, or force a cargo build with `--from-source`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.9.4
+curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.9.5
 curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --from-source
 ```
 

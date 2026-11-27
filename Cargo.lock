@@ -1480,7 +1480,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dd_wcag"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1495,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "dd_wcag_gui"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "dd_wcag",
