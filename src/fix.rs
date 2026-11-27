@@ -116,9 +116,12 @@ impl FixState {
         }
     }
 
-    #[cfg(test)]
     pub fn candidate_count(&self) -> usize {
         self.candidates.len()
+    }
+
+    pub fn candidate_index(&self) -> usize {
+        self.index
     }
 }
 
