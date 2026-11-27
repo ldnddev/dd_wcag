@@ -2,12 +2,19 @@
 
 use std::time::{Duration, Instant};
 
-use dd_wcag::app::{App, FixSource, FocusId, Mode, StylePreset};
+#[cfg(test)]
+use dd_wcag::app::FixSource;
+use dd_wcag::app::{App, FocusId, Mode, StylePreset};
 use dd_wcag::cli::{self, LaunchSeed};
-use dd_wcag::color::{self, Color};
+#[cfg(test)]
+use dd_wcag::color;
+use dd_wcag::color::Color;
+#[cfg(test)]
 use dd_wcag::contrast::contrast_body_text;
 use dd_wcag::fix::FixAxis;
-use dd_wcag::palette::{self, PaletteInput};
+#[cfg(test)]
+use dd_wcag::palette;
+use dd_wcag::palette::PaletteInput;
 use dd_wcag::theme::{Theme, ThemeSource};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(420);
@@ -204,7 +211,8 @@ impl Product {
         effect
     }
 
-    /// Lines the headless tests and the window both read.
+    /// Headless transcript the shell tests read. The window paints from `app` directly.
+    #[cfg(test)]
     pub fn lines(&self) -> Vec<String> {
         let app = &self.app;
         let mut lines = vec![format!("mode:{}", mode_name(app.mode))];
@@ -854,6 +862,7 @@ impl Product {
     }
 }
 
+#[cfg(test)]
 fn shown_color(app: &App, focus: FocusId, stored: &str) -> String {
     if app.focus == focus {
         app.current_input.clone()
@@ -862,6 +871,7 @@ fn shown_color(app: &App, focus: FocusId, stored: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Contrast => "Contrast",
