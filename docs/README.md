@@ -1,8 +1,8 @@
 # Docs
 
-The illustrated tutorial is a GitHub Page (not the GitHub file view — HTML there shows as source):
+The project page is a GitHub Page (not the GitHub file view — HTML there shows as source):
 
-**https://ldnddev.github.io/dd_wcag/**
+**https://ldnddev.github.io/dd_wcag/** — current release. The illustrated tutorial is [tutorial.html](https://ldnddev.github.io/dd_wcag/tutorial.html).
 
 - **[tutorial.html](tutorial.html)** — local source; open this file in a browser.
 - **[capture-screenshots.sh](capture-screenshots.sh)** — regenerates `docs/images/*.png`.

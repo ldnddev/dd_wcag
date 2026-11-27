@@ -2,7 +2,7 @@
 
 WCAG 2.x and APCA contrast checker, plus an SCSS palette builder. The same checker runs in the terminal and in a desktop window. Both read one command line and one theme file. `check` and `palette` print and exit. They never open a UI.
 
-**[Illustrated tutorial](https://ldnddev.github.io/dd_wcag/)** — setup, install, Contrast, Fix, Palette, theming, and how to refresh the screenshots.
+**[Illustrated tutorial](https://ldnddev.github.io/dd_wcag/tutorial.html)** — setup, install, Contrast, Fix, Palette, theming, and how to refresh the screenshots.
 
 ![Contrast tab with a light brand color on a dark background](docs/images/contrast-pair.png)
 

@@ -3,16 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>dd_wcag tutorial</title>
-  <link rel="canonical" href="https://ldnddev.github.io/dd_wcag/tutorial.html">
-  <meta http-equiv="refresh" content="0; url=tutorial.html">
-  <script>
-    (function () {
-      location.replace("tutorial.html" + location.search + location.hash);
-    })();
-  </script>
+  <title>dd_wcag 0.9.5</title>
+  <link rel="canonical" href="https://ldnddev.github.io/dd_wcag/">
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      line-height: 1.5;
+      color: #1c1e21;
+      background: #ffffff;
+    }
+    main {
+      max-width: 40rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      line-height: 1.2;
+    }
+    a {
+      color: #0b3d91;
+    }
+    a:focus {
+      outline: 3px solid #0b3d91;
+      outline-offset: 2px;
+    }
+    pre {
+      background: #f5f6f7;
+      color: #1c1e21;
+      padding: 0.75rem 1rem;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    code {
+      font-family: ui-monospace, monospace;
+    }
+  </style>
 </head>
 <body>
-  <p><a href="tutorial.html">Continue to the illustrated tutorial</a>.</p>
+  <main>
+    <h1>dd_wcag 0.9.5</h1>
+    <p>
+      WCAG 2.x and APCA contrast checker, plus an SCSS palette builder.
+      The same checker runs in the terminal (<code>dd_wcag</code>) and in a
+      desktop window (<code>dd_wcag-gui</code>).
+    </p>
+    <h2>Install</h2>
+    <p>Pin this release, or omit <code>--version</code> to take the latest package:</p>
+    <pre><code>curl -fsSL https://raw.githubusercontent.com/ldnddev/dd_wcag/master/install.sh | bash -s -- --version v0.9.5</code></pre>
+    <p>
+      With no flag, the installer asks for the terminal, the window, or both.
+      A non-interactive shell installs the terminal.
+    </p>
+    <h2>Guide</h2>
+    <p><a href="tutorial.html">Illustrated tutorial</a> covers setup, Contrast, Fix, Palette, and theming.</p>
+    <p><a href="https://github.com/ldnddev/dd_wcag/releases/tag/v0.9.5">Release v0.9.5 on GitHub</a></p>
+  </main>
 </body>
 </html>
