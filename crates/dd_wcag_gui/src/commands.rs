@@ -12,7 +12,10 @@ pub fn command_for_key(key: &str) -> Option<Command> {
 }
 
 pub fn is_settings(key: &str) -> bool {
-    matches!(command_for_key(key), Some(Command::Settings | Command::Theme))
+    matches!(
+        command_for_key(key),
+        Some(Command::Settings | Command::Theme)
+    )
 }
 
 pub fn is_quit(key: &str) -> bool {

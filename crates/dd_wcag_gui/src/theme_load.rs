@@ -2,9 +2,7 @@
 
 use std::path::Path;
 
-use ldnddev_theme::{
-    OmarchyPaths, Palette, ParseMode, ThemeSource, apply_omarchy, load_lookup,
-};
+use ldnddev_theme::{OmarchyPaths, Palette, ParseMode, ThemeSource, apply_omarchy, load_lookup};
 
 pub const THEME_FILE: &str = "dd_wcag_theme.yml";
 
@@ -15,11 +13,7 @@ pub struct LoadedTheme {
     pub warning: Option<String>,
 }
 
-pub fn load(
-    project_root: &Path,
-    paths: &OmarchyPaths,
-    config_home: Option<&Path>,
-) -> LoadedTheme {
+pub fn load(project_root: &Path, paths: &OmarchyPaths, config_home: Option<&Path>) -> LoadedTheme {
     let default_home = ldnddev_theme::default_config_home();
     let home = config_home.or(default_home.as_deref());
     match load_lookup(project_root, THEME_FILE, home, ParseMode::Strict) {

@@ -60,7 +60,10 @@ pub fn config_home() -> PathBuf {
 
 /// `$XDG_CONFIG_HOME/ldnddev/dd_wcag/gui.json`, or `~/.config/ldnddev/dd_wcag/gui.json`.
 pub fn settings_path() -> PathBuf {
-    config_home().join("ldnddev").join("dd_wcag").join("gui.json")
+    config_home()
+        .join("ldnddev")
+        .join("dd_wcag")
+        .join("gui.json")
 }
 
 pub fn load_from(path: &Path) -> GuiSettings {

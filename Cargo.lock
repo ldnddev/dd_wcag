@@ -1504,6 +1504,7 @@ dependencies = [
  "gpui-pre-macros",
  "gpui-pre-platform",
  "ldnddev_theme",
+ "rfd",
  "serde",
  "serde_json",
  "tempfile",

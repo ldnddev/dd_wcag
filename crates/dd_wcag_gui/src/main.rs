@@ -1,7 +1,10 @@
 //! dd_wcag window. Print-only commands never open a window.
 
+mod clipboard;
 mod commands;
 mod paint;
+mod product;
+mod screen;
 mod settings;
 mod shell;
 mod shortcuts;

@@ -3,33 +3,27 @@
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use dd_wcag::cli::LaunchSeed;
-use dd_wcag::color::Color;
+use dd_wcag::palette::{PALETTE_EXPORT_PATH, tokens_json_path_for};
 use gpui::{
     App, ClickEvent, Context, FocusHandle, Focusable, FontWeight, IntoElement, KeyDownEvent,
     ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Window, div,
     prelude::*, px, relative,
 };
 use ldnddev_theme::{
-    ColorField, EditorKey, EditorOutcome, PickerOutcome, PickerRow, ThemeEditor, ThemePicker,
-    ThemeSaveTarget, COLOR_FIELDS,
+    COLOR_FIELDS, ColorField, EditorKey, EditorOutcome, PickerOutcome, PickerRow, ThemeEditor,
+    ThemePicker, ThemeSaveTarget,
 };
 
 use crate::commands::{is_quit, is_settings};
 use crate::paint::{self, Packed};
+use crate::product::{Click, Effect, Product};
 use crate::settings::{self, Density, GuiSettings};
 use crate::theme_load::{self, LoadedTheme};
 
 const PAGES: [&str; 3] = ["Themes", "Window", "Help"];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Field {
-    Fg,
-    Bg,
-    Size,
-    Weight,
-}
 
 struct Appearance {
     picker: ThemePicker,
@@ -46,6 +40,8 @@ pub struct ShellOptions {
     pub config_home: Option<PathBuf>,
     pub quit_runtime: bool,
     pub seed: Option<LaunchSeed>,
+    /// When set, Ctrl+S writes the palette here and skips the file dialog.
+    pub export_dir: Option<PathBuf>,
 }
 
 impl ShellOptions {
@@ -57,6 +53,7 @@ impl ShellOptions {
             config_home: None,
             quit_runtime: true,
             seed: Some(seed),
+            export_dir: None,
         }
     }
 
@@ -69,6 +66,7 @@ impl ShellOptions {
             config_home: Some(dir.to_path_buf()),
             quit_runtime: false,
             seed: None,
+            export_dir: Some(dir.to_path_buf()),
         }
     }
 }
@@ -93,16 +91,11 @@ pub struct Shell {
     query: String,
     query_on: bool,
     settings_scroll: ScrollHandle,
-    field: Field,
-    fg: Color,
-    bg: Color,
-    fg_text: String,
-    bg_text: String,
-    size: u16,
-    weight: u16,
-    size_text: String,
-    weight_text: String,
+    pub(crate) product: Product,
+    pub(crate) product_scroll: ScrollHandle,
+    export_dir: Option<PathBuf>,
     status: String,
+    toast_armed_at: Option<Instant>,
 }
 
 impl Shell {
@@ -113,9 +106,7 @@ impl Shell {
             options.config_home.as_deref(),
         );
         let gui = settings::load_from(&options.settings_file);
-        let fg = Color::parse_hex("#000000").expect("black");
-        let bg = Color::parse_hex("#ffffff").expect("white");
-        let mut shell = Self {
+        Self {
             focus: cx.focus_handle(),
             quit: false,
             quit_runtime: options.quit_runtime,
@@ -134,21 +125,12 @@ impl Shell {
             query: String::new(),
             query_on: false,
             settings_scroll: ScrollHandle::new(),
-            field: Field::Fg,
-            fg,
-            bg,
-            fg_text: fg.to_hex(),
-            bg_text: bg.to_hex(),
-            size: 16,
-            weight: 400,
-            size_text: "16".to_string(),
-            weight_text: "400".to_string(),
+            product: Product::new(options.seed.as_ref()),
+            product_scroll: ScrollHandle::new(),
+            export_dir: options.export_dir,
             status: String::new(),
-        };
-        if let Some(seed) = options.seed {
-            shell.apply_seed(&seed);
+            toast_armed_at: None,
         }
-        shell
     }
 
     #[cfg(test)]
@@ -175,7 +157,191 @@ impl Shell {
             self.open_settings();
             return;
         }
-        self.body_key(&key);
+        let effect = self.product.handle_key(&key);
+        self.apply_effect(effect);
+        self.nudge_view_scroll(&key);
+    }
+
+    fn nudge_view_scroll(&self, key: &str) {
+        let delta = match key {
+            "pageup" => 160.0,
+            "shift-pageup" => 320.0,
+            "pagedown" => -160.0,
+            "shift-pagedown" => -320.0,
+            _ => return,
+        };
+        let current = self.product_scroll.offset();
+        let next_y = current.y + px(delta);
+        let y = if next_y > px(0.0) { px(0.0) } else { next_y };
+        self.product_scroll.set_offset(gpui::point(current.x, y));
+    }
+
+    pub(crate) fn clear_toast_arm(&mut self) {
+        self.toast_armed_at = None;
+    }
+
+    pub(crate) fn arm_toast(&mut self, cx: &mut Context<Self>) {
+        let Some(updated) = self.product.app.notification_updated_at else {
+            self.toast_armed_at = None;
+            return;
+        };
+        if self.toast_armed_at == Some(updated) {
+            return;
+        }
+        self.toast_armed_at = Some(updated);
+        cx.spawn(async move |this, async_cx| {
+            async_cx
+                .background_executor()
+                .timer(dd_wcag::app::TOAST_TTL)
+                .await;
+            let _ = this.update(async_cx, |shell, cx| {
+                if shell.product.app.notification_updated_at == Some(updated) {
+                    shell.product.app.clear_notification();
+                    shell.toast_armed_at = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn activate(&mut self, click: Click) {
+        let effect = self.product.click(click);
+        self.apply_effect(effect);
+    }
+
+    fn apply_effect(&mut self, effect: Effect) {
+        if effect.sync_preview || effect.open_preview {
+            if let Err(err) = dd_wcag::web_preview::sync(&self.product.app) {
+                self.product
+                    .app
+                    .notify_error(format!("Failed to update web preview: {err}"));
+            }
+        }
+        if effect.open_preview {
+            if self.quit_runtime {
+                match dd_wcag::web_preview::open_in_browser() {
+                    Ok(()) => self
+                        .product
+                        .app
+                        .notify_success("Opened web preview. Click toast to dismiss."),
+                    Err(err) => self.product.app.notify_error(format!(
+                        "Failed to open browser preview ({}): {err}",
+                        dd_wcag::web_preview::preview_path().display()
+                    )),
+                }
+            } else {
+                self.product.app.notify_success(format!(
+                    "Preview written to {}",
+                    dd_wcag::web_preview::preview_path().display()
+                ));
+            }
+        }
+        if effect.save_palette {
+            self.save_palette();
+        }
+        if effect.copy_palette {
+            self.copy_palette();
+        }
+        if let Some(text) = effect.copy_text {
+            self.copy_text(&text);
+        }
+        if effect.paste {
+            self.paste_clipboard();
+        }
+    }
+
+    fn save_palette(&mut self) {
+        let (scss, tokens_json) = match self.product.app.prepare_palette_export("saving") {
+            Ok(generated) => (generated.scss.clone(), generated.tokens_json.clone()),
+            Err(err) => {
+                self.product.app.notify_error(err);
+                return;
+            }
+        };
+        let chosen = if let Some(dir) = &self.export_dir {
+            Some(dir.join(PALETTE_EXPORT_PATH))
+        } else if self.quit_runtime {
+            rfd::FileDialog::new()
+                .set_title("Save palette")
+                .set_file_name(PALETTE_EXPORT_PATH)
+                .add_filter("SCSS", &["scss", "css"])
+                .save_file()
+        } else {
+            None
+        };
+        match chosen {
+            Some(path) => match std::fs::write(&path, scss) {
+                Ok(()) => {
+                    let json_path = tokens_json_path_for(&path);
+                    match std::fs::write(&json_path, tokens_json) {
+                        Ok(()) => self.product.app.notify_success(format!(
+                            "Palette saved to {} and {}.",
+                            path.display(),
+                            json_path.display()
+                        )),
+                        Err(err) => self.product.app.notify_error(format!(
+                            "Saved {} but failed to save {}: {err}",
+                            path.display(),
+                            json_path.display()
+                        )),
+                    }
+                }
+                Err(err) => self
+                    .product
+                    .app
+                    .notify_error(format!("Failed to save {}: {err}", path.display())),
+            },
+            None => self.product.app.notify_status("Save cancelled."),
+        }
+    }
+
+    fn copy_text(&mut self, text: &str) {
+        match crate::clipboard::copy(text) {
+            Ok(()) => self.product.app.notify_success(format!("Copied {text}")),
+            Err(err) => self
+                .product
+                .app
+                .notify_error(format!("Clipboard unavailable: {err}")),
+        }
+    }
+
+    fn copy_palette(&mut self) {
+        let scss = match self.product.app.prepare_palette_export("copying") {
+            Ok(generated) => generated.scss.clone(),
+            Err(err) => {
+                self.product.app.notify_error(err);
+                return;
+            }
+        };
+        self.product.app.copied_palette = Some(scss.clone());
+        match crate::clipboard::copy(&scss) {
+            Ok(()) => self
+                .product
+                .app
+                .notify_success("Palette copied to clipboard."),
+            Err(err) => self.product.app.notify_error(format!(
+                "Could not access a system clipboard command: {err}. Palette is available in the app copy buffer."
+            )),
+        }
+    }
+
+    fn paste_clipboard(&mut self) {
+        match crate::clipboard::paste() {
+            Ok(text) => {
+                if self.product.apply_paste(&text) {
+                    if let Err(err) = dd_wcag::web_preview::sync(&self.product.app) {
+                        self.product
+                            .app
+                            .notify_error(format!("Failed to update web preview: {err}"));
+                    }
+                }
+            }
+            Err(err) => self
+                .product
+                .app
+                .notify_error(format!("Clipboard unavailable: {err}")),
+        }
     }
 
     pub fn set_density(&mut self, density: Density) {
@@ -192,7 +358,7 @@ impl Shell {
     pub fn visible_text(&self) -> String {
         let mut lines = Vec::new();
         lines.push("dd_wcag".to_string());
-        lines.extend(self.body_lines());
+        lines.extend(self.product.lines());
         lines.push(format!("footer:{}", self.footer_text()));
         if self.appearance.is_some() {
             lines.push("settings-panel:right:70".to_string());
@@ -271,23 +437,6 @@ impl Shell {
         lines.join("\n")
     }
 
-    #[cfg(test)]
-    fn body_lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            format!("Foreground {}", self.fg_text),
-            format!("Background {}", self.bg_text),
-            format!("Size {}", self.size_text),
-            format!("Weight {}", self.weight_text),
-        ];
-        lines.push(dd_wcag::contrast::contrast_body_text(
-            &self.fg,
-            &self.bg,
-            self.size,
-            self.weight,
-        ));
-        lines
-    }
-
     fn footer_text(&self) -> String {
         if self.appearance.is_some() {
             "F1: Settings  Esc: Close  Ctrl+Q: Quit".to_string()
@@ -303,143 +452,6 @@ impl Shell {
         }
     }
 
-    fn apply_seed(&mut self, seed: &LaunchSeed) {
-        self.size = seed.size_px;
-        self.weight = seed.weight;
-        self.size_text = self.size.to_string();
-        self.weight_text = self.weight.to_string();
-        if let Some(color) = &seed.fg {
-            self.fg = color.color;
-            self.fg_text = color.text.clone();
-        }
-        if let Some(color) = &seed.bg {
-            self.bg = color.color;
-            self.bg_text = color.text.clone();
-        }
-    }
-
-    fn body_key(&mut self, key: &str) {
-        match key {
-            "tab" => self.cycle_field(1),
-            "shift-tab" | "backtab" => self.cycle_field(-1),
-            "backspace" => self.backspace_field(),
-            "up" => self.step_field(true),
-            "down" => self.step_field(false),
-            other if is_char(other) => self.type_field(other.chars().next().unwrap_or('?')),
-            _ => {}
-        }
-    }
-
-    fn cycle_field(&mut self, dir: i32) {
-        let order = [Field::Fg, Field::Bg, Field::Size, Field::Weight];
-        let index = order
-            .iter()
-            .position(|field| *field == self.field)
-            .unwrap_or(0) as i32;
-        let next = (index + dir).rem_euclid(order.len() as i32) as usize;
-        self.field = order[next];
-    }
-
-    fn backspace_field(&mut self) {
-        match self.field {
-            Field::Fg => {
-                self.fg_text.pop();
-                self.apply_hex_draft();
-            }
-            Field::Bg => {
-                self.bg_text.pop();
-                self.apply_hex_draft();
-            }
-            Field::Size => {
-                self.size_text.pop();
-                self.apply_metric_draft();
-            }
-            Field::Weight => {
-                self.weight_text.pop();
-                self.apply_metric_draft();
-            }
-        }
-    }
-
-    fn step_field(&mut self, up: bool) {
-        let sign: i16 = if up { 1 } else { -1 };
-        match self.field {
-            Field::Size => {
-                self.size = (self.size as i16 + sign).clamp(6, 120) as u16;
-                self.size_text = self.size.to_string();
-            }
-            Field::Weight => {
-                self.weight = ((self.weight as i16 + sign * 100) / 100 * 100).clamp(100, 900) as u16;
-                self.weight_text = self.weight.to_string();
-            }
-            _ => {}
-        }
-    }
-
-    fn type_field(&mut self, ch: char) {
-        match self.field {
-            Field::Fg | Field::Bg => {
-                if ch == '#' || ch.is_ascii_hexdigit() {
-                    let text = match self.field {
-                        Field::Fg => &mut self.fg_text,
-                        _ => &mut self.bg_text,
-                    };
-                    if text.len() < 7 {
-                        text.push(ch.to_ascii_lowercase());
-                    }
-                    self.apply_hex_draft();
-                }
-            }
-            Field::Size | Field::Weight => {
-                if ch.is_ascii_digit() {
-                    let text = match self.field {
-                        Field::Size => &mut self.size_text,
-                        _ => &mut self.weight_text,
-                    };
-                    if text.len() < 3 {
-                        text.push(ch);
-                    }
-                    self.apply_metric_draft();
-                }
-            }
-        }
-    }
-
-    fn apply_hex_draft(&mut self) {
-        let text = match self.field {
-            Field::Fg => self.fg_text.clone(),
-            Field::Bg => self.bg_text.clone(),
-            _ => return,
-        };
-        let parsed = Color::parse_input(&text)
-            .map(|(color, _)| color)
-            .or_else(|_| Color::parse_hex(&text).map_err(|err| err.to_string()));
-        if let Ok(color) = parsed {
-            match self.field {
-                Field::Fg => self.fg = color,
-                Field::Bg => self.bg = color,
-                _ => {}
-            }
-        }
-    }
-
-    fn apply_metric_draft(&mut self) {
-        match self.field {
-            Field::Size => {
-                if let Ok(value) = self.size_text.parse::<u16>() {
-                    self.size = value.clamp(6, 120);
-                }
-            }
-            Field::Weight => {
-                if let Ok(value) = self.weight_text.parse::<u16>() {
-                    let stepped = (value / 100) * 100;
-                    self.weight = stepped.clamp(100, 900);
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn open_settings(&mut self) {
         if self.appearance.is_some() {
             self.close_settings();
@@ -447,11 +459,7 @@ impl Shell {
         }
         let snapshot = self.palette.clone();
         let fields = theme_fields();
-        let picker = ThemePicker::new(
-            self.palette.clone(),
-            &fields,
-            self.omarchy_paths.clone(),
-        );
+        let picker = ThemePicker::new(self.palette.clone(), &fields, self.omarchy_paths.clone());
         let direct = !picker.lists_omarchy();
         let mut appearance = Appearance {
             picker,
@@ -656,8 +664,16 @@ impl Shell {
             home,
             &fields,
         ) {
-            Ok(path) => self.status = format!("Theme saved ({})", path.display()),
-            Err(err) => self.status = format!("Theme save failed: {err}"),
+            Ok(path) => {
+                let message = format!("Theme saved ({})", path.display());
+                self.status = message.clone();
+                self.product.app.notify_success(message);
+            }
+            Err(err) => {
+                let message = format!("Theme save failed: {err}");
+                self.status = message.clone();
+                self.product.app.notify_error(message);
+            }
         }
     }
 
@@ -702,7 +718,8 @@ impl Shell {
             appearance.picker.handle(EditorKey::Enter)
         };
         if let PickerOutcome::Error(message) = outcome {
-            self.status = message;
+            self.status = message.clone();
+            self.product.app.notify_error(message);
             return;
         }
         self.install_picker_palette();
@@ -809,7 +826,10 @@ impl Shell {
             let Some(appearance) = &mut self.appearance else {
                 return;
             };
-            let palette = appearance.editor.as_ref().map(|editor| editor.palette.clone());
+            let palette = appearance
+                .editor
+                .as_ref()
+                .map(|editor| editor.palette.clone());
             appearance.editor = None;
             appearance.hex_error = None;
             if let Some(palette) = palette.clone() {
@@ -922,26 +942,15 @@ impl Render for Shell {
             self.focus.focus(window, cx);
         }
         cx.set_reduce_motion(self.gui.reduced_motion);
+        self.arm_toast(cx);
         let pack = paint::pack(&self.palette);
         let bar = self.row_h();
         let footer = self.footer_text();
-        let summary = dd_wcag::contrast::contrast_body_text(&self.fg, &self.bg, self.size, self.weight);
-        let fg_text = self.fg_text.clone();
-        let bg_text = self.bg_text.clone();
-        let size_text = self.size_text.clone();
-        let weight_text = self.weight_text.clone();
-        let fields = CheckerFields {
-            focus: self.field,
-            fg_text: &fg_text,
-            bg_text: &bg_text,
-            size_text: &size_text,
-            weight_text: &weight_text,
-            fg_swatch: paint::hsla_bytes(self.fg.rgb_u8()),
-            bg_swatch: paint::hsla_bytes(self.bg.rgb_u8()),
-        };
         let open = self.appearance.is_some();
         let warning = self.theme_warning.clone();
-        let body = body_column(cx, bar, pack, &fields, &summary);
+        let header = crate::screen::header(cx, self, pack, bar);
+        let body = crate::screen::body(cx, self, pack);
+        let toast = crate::screen::toast(cx, self, pack);
         let panel = if open {
             Some(settings_panel(cx, self, pack, bar))
         } else {
@@ -962,33 +971,15 @@ impl Render for Shell {
             .bg(pack.base)
             .text_color(pack.text)
             .text_size(px(13.0))
-            .child(header_bar(bar, pack))
+            .child(header)
             .child(body)
+            .when_some(toast, |row, toast| row.child(toast))
             .child(footer_bar(bar, pack, footer))
             .when_some(warning, |row, warning| {
-                row.child(
-                    div()
-                        .px(px(12.0))
-                        .text_color(pack.secondary)
-                        .child(warning),
-                )
+                row.child(div().px(px(12.0)).text_color(pack.secondary).child(warning))
             })
             .when_some(panel, |row, panel| row.child(panel))
     }
-}
-
-fn header_bar(bar: f32, pack: Packed) -> gpui::Div {
-    div()
-        .h(px(bar))
-        .px(px(12.0))
-        .flex()
-        .items_center()
-        .bg(pack.raised)
-        .text_color(pack.text)
-        .font_weight(FontWeight::BOLD)
-        .border_b_1()
-        .border_color(pack.border)
-        .child("dd_wcag")
 }
 
 fn footer_bar(bar: f32, pack: Packed, footer: String) -> gpui::Div {
@@ -1002,168 +993,6 @@ fn footer_bar(bar: f32, pack: Packed, footer: String) -> gpui::Div {
         .border_t_1()
         .border_color(pack.border)
         .child(footer)
-}
-
-fn summary_color(line: &str, pack: Packed) -> gpui::Hsla {
-    if line.contains('✗') || line.contains("fail") {
-        pack.error
-    } else if line.contains('✓') || line.contains("pass") {
-        pack.success
-    } else {
-        pack.text
-    }
-}
-
-struct CheckerFields<'a> {
-    focus: Field,
-    fg_text: &'a str,
-    bg_text: &'a str,
-    size_text: &'a str,
-    weight_text: &'a str,
-    fg_swatch: gpui::Hsla,
-    bg_swatch: gpui::Hsla,
-}
-
-struct HexRow<'a> {
-    id: &'static str,
-    label: &'a str,
-    value: &'a str,
-    swatch: gpui::Hsla,
-    on: bool,
-    field: Field,
-}
-
-fn body_column(
-    cx: &mut Context<Shell>,
-    bar: f32,
-    pack: Packed,
-    fields: &CheckerFields<'_>,
-    summary: &str,
-) -> gpui::Div {
-    div()
-        .flex_1()
-        .min_h(px(0.0))
-        .flex()
-        .flex_col()
-        .p(px(12.0))
-        .gap(px(8.0))
-        .child(hex_row(
-            cx,
-            pack,
-            bar,
-            &HexRow {
-                id: "fg-hex",
-                label: "Foreground",
-                value: fields.fg_text,
-                swatch: fields.fg_swatch,
-                on: fields.focus == Field::Fg,
-                field: Field::Fg,
-            },
-        ))
-        .child(hex_row(
-            cx,
-            pack,
-            bar,
-            &HexRow {
-                id: "bg-hex",
-                label: "Background",
-                value: fields.bg_text,
-                swatch: fields.bg_swatch,
-                on: fields.focus == Field::Bg,
-                field: Field::Bg,
-            },
-        ))
-        .child(metric_row(
-            cx,
-            "size-field",
-            "Size",
-            fields.size_text,
-            fields.focus == Field::Size,
-            pack,
-            Field::Size,
-        ))
-        .child(metric_row(
-            cx,
-            "weight-field",
-            "Weight",
-            fields.weight_text,
-            fields.focus == Field::Weight,
-            pack,
-            Field::Weight,
-        ))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .children(summary.lines().map(|line| {
-                    div()
-                        .text_color(summary_color(line, pack))
-                        .child(line.to_string())
-                })),
-        )
-}
-
-fn hex_row(
-    cx: &mut Context<Shell>,
-    pack: Packed,
-    bar: f32,
-    row: &HexRow<'_>,
-) -> gpui::Stateful<gpui::Div> {
-    let field = row.field;
-    div()
-        .id(row.id)
-        .h(px(36.0))
-        .px(px(8.0))
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .border_1()
-        .border_color(if row.on { pack.accent } else { pack.border })
-        .bg(pack.panel)
-        .cursor_pointer()
-        .on_click(cx.listener(move |shell, _: &ClickEvent, _, cx| {
-            shell.field = field;
-            cx.stop_propagation();
-            cx.notify();
-        }))
-        .child(
-            div()
-                .w(px(110.0))
-                .text_color(pack.secondary)
-                .child(row.label.to_string()),
-        )
-        .child(div().flex_1().child(row.value.to_string()))
-        .child(div().w(px(bar)).h(px(bar)).bg(row.swatch))
-}
-
-fn metric_row(
-    cx: &mut Context<Shell>,
-    id: &'static str,
-    label: &str,
-    value: &str,
-    on: bool,
-    pack: Packed,
-    field: Field,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .h(px(36.0))
-        .px(px(8.0))
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .border_1()
-        .border_color(if on { pack.accent } else { pack.border })
-        .bg(pack.panel)
-        .cursor_pointer()
-        .on_click(cx.listener(move |shell, _: &ClickEvent, _, cx| {
-            shell.field = field;
-            cx.stop_propagation();
-            cx.notify();
-        }))
-        .child(div().w(px(110.0)).text_color(pack.secondary).child(label.to_string()))
-        .child(value.to_string())
 }
 
 fn settings_panel(
@@ -1361,8 +1190,22 @@ fn settings_scroll(
                 div()
                     .flex()
                     .flex_col()
-                    .child(window_choice(cx, "density-comfortable", "Comfortable", shell.row == 0 && shell.gui.density == Density::Comfortable, pack, 0))
-                    .child(window_choice(cx, "density-compact", "Compact", shell.row == 0 && shell.gui.density == Density::Compact, pack, 0)),
+                    .child(window_choice(
+                        cx,
+                        "density-comfortable",
+                        "Comfortable",
+                        shell.row == 0 && shell.gui.density == Density::Comfortable,
+                        pack,
+                        0,
+                    ))
+                    .child(window_choice(
+                        cx,
+                        "density-compact",
+                        "Compact",
+                        shell.row == 0 && shell.gui.density == Density::Compact,
+                        pack,
+                        0,
+                    )),
             ))
             .child(div().h(px(12.0)))
             .child(outlined(
@@ -1463,20 +1306,24 @@ fn settings_scroll(
         );
     }
     let save_to = target_word(appearance.picker.save_target);
-    body.child(div().text_color(pack.secondary).child(format!("Source: {}", shell.theme_label)))
-        .child(div().child(format!("Save to {save_to}")))
-        .child(
-            div()
-                .id("theme-save")
-                .h(px(28.0))
-                .cursor_pointer()
-                .child("Save")
-                .on_click(cx.listener(|shell, _: &ClickEvent, _, cx| {
-                    shell.save_theme();
-                    cx.stop_propagation();
-                    cx.notify();
-                })),
-        )
+    body.child(
+        div()
+            .text_color(pack.secondary)
+            .child(format!("Source: {}", shell.theme_label)),
+    )
+    .child(div().child(format!("Save to {save_to}")))
+    .child(
+        div()
+            .id("theme-save")
+            .h(px(28.0))
+            .cursor_pointer()
+            .child("Save")
+            .on_click(cx.listener(|shell, _: &ClickEvent, _, cx| {
+                shell.save_theme();
+                cx.stop_propagation();
+                cx.notify();
+            })),
+    )
 }
 
 fn window_choice(
